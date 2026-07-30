@@ -1,281 +1,154 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  CATEGORY_META,
-  DEFAULT_WEIGHTS,
-  MARKET_CONFIG,
-  PREFERENCE_OPTIONS,
-  QUESTIONS,
-  type CategoryId,
-  type PreferenceKey,
-} from "../lib/config";
-import { calculateScore, validWeightTotal, type Answers, type Preferences } from "../lib/scoring";
+import { MARKET_CONFIG, UPLOAD_LIMITS, type VisualCategory, type VisualObservation } from "../lib/config";
+import { herdEconomics, scoreObservation } from "../lib/scoring";
 
-type Stage = "landing" | "consent" | "identity" | "preferences" | "quiz" | "reveal" | "result";
+type Stage = "landing" | "consent" | "upload" | "analyzing" | "reveal" | "result";
 type Motion = "full" | "reduced" | "off";
+type Photo = { id: string; url: string; dataUrl: string; rotation: number; zoom: number };
 
-const categoryOrder = Object.keys(CATEGORY_META) as CategoryId[];
-const formatMoney = (value: number, currency: "USD" | "SAR") =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
+const labels: Record<VisualCategory, string> = { face: "Face & harmony", body: "Body proportions", hair: "Hair", style: "Style", coherence: "Visual coherence" };
+const money = (value: number, currency: "USD" | "SAR") => new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
 
 function Camel({ className = "", gold = false }: { className?: string; gold?: boolean }) {
-  return (
-    <span className={`camel ${gold ? "gold" : ""} ${className}`} aria-hidden="true">
-      <i className="camel-neck" /><i className="camel-head" /><i className="camel-ear" />
-      <i className="camel-body" /><i className="hump one" /><i className="hump two" />
-      <i className="leg a" /><i className="leg b" /><i className="leg c" /><i className="leg d" />
-      <i className="tail" />
-    </span>
-  );
+  return <span className={`camel ${gold ? "gold" : ""} ${className}`} aria-hidden="true"><i className="camel-neck" /><i className="camel-head" /><i className="camel-ear" /><i className="camel-body" /><i className="hump one" /><i className="hump two" /><i className="leg a" /><i className="leg b" /><i className="leg c" /><i className="leg d" /><i className="tail" /></span>;
 }
 
-function DesertScene({ busy = false }: { busy?: boolean }) {
-  return (
-    <div className={`desert-scene ${busy ? "busy" : ""}`} aria-hidden="true">
-      <div className="sun" /><div className="cloud c1" /><div className="cloud c2" />
-      <div className="stars">✦ · ✧ · ✦ · ✧</div>
-      <div className="dune back" /><div className="dune front" />
-      <div className="caravan">
-        <Camel /><Camel className="delay1" /><Camel className="delay2" />
-      </div>
-      <div className="dust d1" /><div className="dust d2" />
-    </div>
-  );
+function DesertScene() {
+  return <div className="desert-scene" aria-hidden="true"><div className="sun" /><div className="cloud c1" /><div className="cloud c2" /><div className="stars">✦ · ✧ · ✦ · ✧</div><div className="dune back" /><div className="dune front" /><div className="caravan"><Camel /><Camel className="delay1" /><Camel className="delay2" /></div></div>;
 }
 
-function Settings({ motion, setMotion, sound, setSound }: {
-  motion: Motion; setMotion: (m: Motion) => void; sound: boolean; setSound: (s: boolean) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="settings">
-      <button className="icon-button" aria-label="Visual and audio settings" onClick={() => setOpen(!open)}>⚙</button>
-      {open && <div className="settings-panel">
-        <strong>Show controls</strong>
-        <label>Motion
-          <select value={motion} onChange={(e) => setMotion(e.target.value as Motion)}>
-            <option value="full">Full motion</option><option value="reduced">Reduced motion</option><option value="off">Motion off</option>
-          </select>
-        </label>
-        <label className="toggle"><input type="checkbox" checked={sound} onChange={(e) => setSound(e.target.checked)} /> Sound effects <em>off by default</em></label>
-      </div>}
-    </div>
-  );
+async function sanitizeImage(file: File, rotation = 0, zoom = 1) {
+  const header = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  const sig = (file.type === "image/jpeg" && header[0] === 0xff && header[1] === 0xd8) ||
+    (file.type === "image/png" && header[0] === 137 && header[1] === 80) ||
+    (file.type === "image/webp" && String.fromCharCode(...header.slice(0, 4)) === "RIFF");
+  if (!UPLOAD_LIMITS.acceptedMimeTypes.includes(file.type as never) || !sig || file.size > UPLOAD_LIMITS.maxBytes) throw new Error("Use a genuine JPEG, PNG, or WebP under 8 MB.");
+  const bitmap = await createImageBitmap(file);
+  if (bitmap.width > UPLOAD_LIMITS.maxDimension || bitmap.height > UPLOAD_LIMITS.maxDimension) throw new Error("That image is too large. Maximum dimensions are 4096 × 4096.");
+  const max = 1440;
+  const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+  const swap = Math.abs(rotation % 180) === 90;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round((swap ? bitmap.height : bitmap.width) * scale);
+  canvas.height = Math.round((swap ? bitmap.width : bitmap.height) * scale);
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#f3dfb3"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(canvas.width / 2, canvas.height / 2); ctx.rotate(rotation * Math.PI / 180); ctx.scale(zoom, zoom);
+  ctx.drawImage(bitmap, -bitmap.width * scale / 2, -bitmap.height * scale / 2, bitmap.width * scale, bitmap.height * scale);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", 0.86);
 }
 
 export default function CamelCalculator() {
   const [stage, setStage] = useState<Stage>("landing");
   const [motion, setMotion] = useState<Motion>(() =>
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ? "reduced"
-      : "full",
+    typeof window !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "full",
   );
-  const [sound, setSound] = useState(false);
-  const [adult, setAdult] = useState(false);
-  const [consent, setConsent] = useState(false);
-  const [rating, setRating] = useState<"myself" | "partner">("myself");
+  const [consents, setConsents] = useState([false, false, false, false, false]);
+  const [photos, setPhotos] = useState<Photo[]>([]);
   const [name, setName] = useState("");
-  const [preferences, setPreferences] = useState<Preferences>({});
-  const [skipAppearance, setSkipAppearance] = useState(false);
-  const [weights, setWeights] = useState({ ...DEFAULT_WEIGHTS });
-  const [answers, setAnswers] = useState<Answers>({});
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [countdown, setCountdown] = useState(3);
-  const [displayCount, setDisplayCount] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [status, setStatus] = useState(0);
   const [error, setError] = useState("");
-  const cardRef = useRef<HTMLDivElement>(null);
-  const result = useMemo(
-    () => calculateScore(answers, preferences, weights, skipAppearance),
-    [answers, preferences, weights, skipAppearance],
-  );
-  const current = QUESTIONS[questionIndex];
-  const progress = Math.round((questionIndex / QUESTIONS.length) * 100);
+  const [observation, setObservation] = useState<VisualObservation | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const result = useMemo(() => observation ? scoreObservation(observation) : null, [observation]);
+  const economics = result ? herdEconomics(result.camels) : null;
 
-  useEffect(() => {
-    const onVisibility = () => document.documentElement.classList.toggle("page-hidden", document.hidden);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, []);
+  useEffect(() => { document.documentElement.dataset.motion = motion; }, [motion]);
 
-  useEffect(() => {
-    document.documentElement.dataset.motion = motion;
-  }, [motion]);
-
-  useEffect(() => {
-    if (stage !== "reveal") return;
-    const c = window.setInterval(() => setCountdown((n) => Math.max(0, n - 1)), 650);
-    const reveal = window.setTimeout(() => {
-      let count = 0;
-      const ticker = window.setInterval(() => {
-        count = Math.min(result.camelCount, count + Math.max(1, Math.ceil(result.camelCount / 24)));
-        setDisplayCount(count);
-        if (count >= result.camelCount) {
-          window.clearInterval(ticker);
-          window.setTimeout(() => setStage("result"), 600);
-        }
-      }, 45);
-    }, 2100);
-    return () => { window.clearInterval(c); window.clearTimeout(reveal); };
-  }, [stage, result.camelCount, motion]);
-
-  function begin() { setStage("consent"); }
-  function restart() {
-    setStage("landing"); setAnswers({}); setQuestionIndex(0); setName(""); setCountdown(3); setDisplayCount(0); setError("");
-  }
-  function nextQuestion() {
-    if (answers[current.id] == null) { setError("The camel requires an answer. It is preparing to spit."); return; }
+  async function addFiles(files: FileList | File[]) {
     setError("");
-    if (questionIndex === QUESTIONS.length - 1) {
-      if (motion === "off") {
-        setCountdown(0);
-        setDisplayCount(result.camelCount);
-        setStage("result");
-      } else {
-        setStage("reveal");
-      }
-    }
-    else setQuestionIndex((i) => i + 1);
+    const selected = Array.from(files).slice(0, UPLOAD_LIMITS.maxFiles - photos.length);
+    try {
+      const added = await Promise.all(selected.map(async (file) => {
+        const dataUrl = await sanitizeImage(file);
+        return { id: crypto.randomUUID(), url: dataUrl, dataUrl, rotation: 0, zoom: 1 };
+      }));
+      setPhotos((existing) => [...existing, ...added]);
+    } catch (e) { setError(e instanceof Error ? e.message : "That photograph could not be prepared."); }
   }
-  function setPreference(key: PreferenceKey, value: string) {
-    setPreferences((p) => ({ ...p, [key]: value === "none" ? null : Number(value) }));
+  function removePhoto(id: string) { setPhotos((items) => items.filter((p) => p.id !== id)); }
+  async function rotatePhoto(photo: Photo) {
+    const response = await fetch(photo.dataUrl); const file = new File([await response.blob()], "photo.jpg", { type: "image/jpeg" });
+    const rotation = (photo.rotation + 90) % 360; const dataUrl = await sanitizeImage(file, 90);
+    setPhotos((items) => items.map((p) => p.id === photo.id ? { ...p, rotation, dataUrl, url: dataUrl } : p));
   }
-  async function share() {
-    const text = `${name || "A mysterious traveler"} scored ${result.camelCount} fictional working camels — ${result.tier.title}. For entertainment only.`;
-    if (navigator.share) {
-      try { await navigator.share({ title: "Camel Calculator", text, url: location.href }); return; } catch {}
-    }
-    await navigator.clipboard.writeText(`${text} ${location.href}`);
-    setError("Result copied. The desert post office is impressed.");
+  function deletePhotos() { setPhotos([]); setObservation(null); setError(""); setStage("upload"); }
+  function restart() { setPhotos([]); setObservation(null); setError(""); setName(""); setConsents([false, false, false, false, false]); setStage("landing"); }
+
+  async function analyze() {
+    setStage("analyzing"); setStatus(0); setError("");
+    const timer = window.setInterval(() => setStatus((s) => Math.min(5, s + 1)), 900);
+    try {
+      const preparedImages = await Promise.all(photos.map(async (photo) => {
+        const response = await fetch(photo.dataUrl);
+        const file = new File([await response.blob()], "sanitized.jpg", { type: "image/jpeg" });
+        return sanitizeImage(file, 0, photo.zoom);
+      }));
+      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ images: preparedImages }) });
+      const body = await response.json() as { observation?: VisualObservation; error?: string };
+      if (!response.ok || !body.observation) throw new Error(body.error || "The caravan could not finish the analysis.");
+      setObservation(body.observation); setStatus(6);
+      window.setTimeout(() => setStage(motion === "off" ? "result" : "reveal"), motion === "off" ? 0 : 700);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Analysis failed."); setStage("upload");
+    } finally { window.clearInterval(timer); }
   }
   function downloadCard() {
-    const canvas = document.createElement("canvas");
-    canvas.width = 1200; canvas.height = 630;
-    const ctx = canvas.getContext("2d")!;
-    const grad = ctx.createLinearGradient(0, 0, 1200, 630);
-    grad.addColorStop(0, "#111b3a"); grad.addColorStop(1, "#7d3025");
-    ctx.fillStyle = grad; ctx.fillRect(0, 0, 1200, 630);
-    ctx.fillStyle = "#eabf72"; ctx.font = "700 28px Georgia"; ctx.fillText("CAMEL CALCULATOR · DESERT EDITION", 70, 75);
-    ctx.fillStyle = "#fff7df"; ctx.font = "700 42px Georgia"; ctx.fillText(name || "MYSTERIOUS TRAVELER", 70, 155);
-    ctx.font = "700 170px Georgia"; ctx.fillText(String(result.camelCount), 65, 340);
-    ctx.font = "700 34px Georgia"; ctx.fillText("FICTIONAL WORKING CAMELS", 410, 285);
-    ctx.fillStyle = "#eabf72"; ctx.font = "italic 38px Georgia"; ctx.fillText(result.tier.title, 410, 335);
-    const cats = categoryOrder;
-    cats.forEach((key, i) => {
-      const x = 70 + i * 175; const h = result.categoryScores[key] * 1.3;
-      ctx.fillStyle = "#d36b46"; ctx.fillRect(x, 520 - h, 120, h);
-      ctx.fillStyle = "#fff7df"; ctx.font = "18px sans-serif"; ctx.fillText(CATEGORY_META[key].short, x, 550);
-    });
-    ctx.fillStyle = "#fff7df"; ctx.font = "18px sans-serif"; ctx.fillText("FOR ENTERTAINMENT ONLY · PEOPLE ARE NOT PROPERTY", 70, 605);
-    const link = document.createElement("a"); link.download = "camel-calculator-result.png"; link.href = canvas.toDataURL("image/png"); link.click();
+    if (!result) return;
+    const canvas = document.createElement("canvas"); canvas.width = 1200; canvas.height = 630;
+    const ctx = canvas.getContext("2d")!; const grad = ctx.createLinearGradient(0, 0, 1200, 630);
+    grad.addColorStop(0, "#101a38"); grad.addColorStop(1, "#8d3f2f"); ctx.fillStyle = grad; ctx.fillRect(0, 0, 1200, 630);
+    ctx.fillStyle = "#e7b95f"; ctx.font = "700 28px Georgia"; ctx.fillText("CAMEL CALCULATOR · VISUAL EDITION", 65, 75);
+    ctx.fillStyle = "#fff8e8"; ctx.font = "700 44px Georgia"; ctx.fillText(name || "MYSTERIOUS TRAVELER", 65, 150);
+    ctx.font = "700 190px Georgia"; ctx.fillText(String(result.camels), 60, 375); ctx.font = "700 34px Georgia"; ctx.fillText("FICTIONAL WORKING CAMELS", 420, 275);
+    ctx.fillStyle = "#e7b95f"; ctx.font = "italic 42px Georgia"; ctx.fillText(result.tier.title, 420, 335);
+    ctx.fillStyle = "#fff8e8"; ctx.font = "22px Arial"; ctx.fillText(`Analysis confidence: ${Math.round(result.confidence * 100)}%`, 420, 390);
+    ctx.font = "18px Arial"; ctx.fillText("FICTIONAL ENTERTAINMENT FOR CONSENTING ADULTS · PHOTO NOT INCLUDED", 65, 585);
+    const a = document.createElement("a"); a.download = "camel-calculator-result.png"; a.href = canvas.toDataURL("image/png"); a.click();
   }
 
-  return (
-    <main>
-      <Settings motion={motion} setMotion={setMotion} sound={sound} setSound={setSound} />
-      {(stage === "landing" || stage === "consent") && <DesertScene busy={stage === "consent"} />}
+  return <main>
+    <div className="settings"><select aria-label="Motion preference" value={motion} onChange={(e) => setMotion(e.target.value as Motion)}><option value="full">Full motion</option><option value="reduced">Reduced motion</option><option value="off">Motion off</option></select></div>
+    {(stage === "landing" || stage === "consent") && <DesertScene />}
+    {stage === "landing" && <section className="hero"><span className="eyebrow">THE INTERNET’S LEAST NECESSARY VISUAL ANALYSIS</span><h1>Camel<br /><em>Calculator</em></h1><p className="lead">Upload one to three appropriate photos. The caravan observes visible traits. Your private rubric counts the fictional camels.</p><button className="primary stampede" onClick={() => setStage("consent")}>Upload & Calculate <span>→</span></button><p className="micro">Adults only · no face recognition · no permanent photo storage · zero science</p></section>}
 
-      {stage === "landing" && <section className="hero">
-        <div className="brand-lockup"><span className="eyebrow">THE INTERNET’S LEAST NECESSARY METRIC</span><span className="brand-mark">CC</span></div>
-        <h1>Camel<br /><em>Calculator</em></h1>
-        <p className="lead">Two minutes. One desert. An unreasonable number of fictional working camels.</p>
-        <button className="primary stampede" onClick={begin}>Count the Camels <span>→</span></button>
-        <p className="micro">Adults only · subjective preferences · zero science · no photos</p>
-        <div className="ticket"><span>TONIGHT ONLY</span><strong>THE GREAT HERD REVEAL</strong><i>✦ RIYADH MARKET FANTASY EDITION ✦</i></div>
-      </section>}
+    {stage === "consent" && <section className="panel compact consent-photo"><span className="eyebrow">PHOTO RIGHTS CHECKPOINT</span><h2>Adults. Permission. Appropriate photos.</h2><p>Only upload photos of adults who are in on the joke.</p>
+      {[
+        "Every person shown is at least 18 years old.",
+        "I am the person shown or have that person’s permission.",
+        "The image is not intimate, explicit, private, or deceptive.",
+        "The result is fictional entertainment.",
+        "I understand that a person’s real worth cannot be calculated.",
+      ].map((copy, i) => <label className="check" key={copy}><input type="checkbox" checked={consents[i]} onChange={(e) => setConsents((c) => c.map((v, x) => x === i ? e.target.checked : v))} /><span><strong>{copy}</strong></span></label>)}
+      <button className="primary" disabled={!consents.every(Boolean)} onClick={() => setStage("upload")}>Choose photographs →</button>
+    </section>}
 
-      {stage === "consent" && <section className="panel compact">
-        <span className="eyebrow">BEFORE THE CARAVAN DEPARTS</span>
-        <h2>Adults. Consent. A sense of humor.</h2>
-        <p>This is fictional entertainment. A human being’s worth cannot be measured, and body shape does not establish fertility or childbirth ability.</p>
-        <label className="check"><input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} /><span><strong>I am 18 or older</strong><small>This experience is strictly for adults.</small></span></label>
-        <label className="check"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} /><span><strong>I understand the joke</strong><small>Only rate adults who are in on the joke.</small></span></label>
-        <button className="primary" disabled={!adult || !consent} onClick={() => setStage("identity")}>Enter the desert →</button>
-      </section>}
+    {stage === "upload" && <section className="upload-page"><header><span className="eyebrow">VISUAL EVIDENCE · 1–3 PHOTOS</span><h1>Give the caravan<br /><em>a clear view.</em></h1><p>A face photo is best. A front or three-quarter full-body photo improves coverage. A third angle is optional—more photos never add points.</p></header>
+      <div className={`dropzone ${dragging ? "dragging" : ""}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }} onClick={() => inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && inputRef.current?.click()}>
+        <Camel /><strong>{photos.length ? "Add another angle" : "Drop photographs into the desert"}</strong><span>or tap to choose from your device</span><small>JPEG, PNG, WebP · 8 MB each · up to 4096 px</small>
+        <input ref={inputRef} hidden type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple onChange={(e) => e.target.files && addFiles(e.target.files)} />
+      </div>
+      <aside className="privacy-note"><strong>☾ Your photos are private cargo.</strong><p>They are re-encoded in your browser to strip metadata, sent only for this analysis, never placed in public storage, never added to the share card, and not retained by Camel Calculator. Restart deletes local photo state.</p></aside>
+      {photos.length > 0 && <div className="photo-grid">{photos.map((photo, i) => <article className="photo-card" key={photo.id}><div className="photo-frame"><img src={photo.url} alt={`Selected photograph ${i + 1}`} style={{ transform: `scale(${photo.zoom})` }} /></div><div><strong>VIEW {i + 1}</strong><button onClick={() => rotatePhoto(photo)}>↻ Rotate</button><label>Crop <input aria-label={`Crop photo ${i + 1}`} type="range" min="1" max="1.6" step=".1" value={photo.zoom} onChange={(e) => setPhotos((items) => items.map((p) => p.id === photo.id ? { ...p, zoom: Number(e.target.value) } : p))} /></label><button onClick={() => removePhoto(photo.id)}>Remove</button></div></article>)}</div>}
+      {error && <div className="error" role="alert">{error}</div>}
+      <label className="field nickname"><span>Nickname <em>optional</em></span><input value={name} maxLength={24} onChange={(e) => setName(e.target.value)} placeholder="The Oasis Enigma" /></label>
+      <div className="actions"><button className="text-button danger" disabled={!photos.length} onClick={deletePhotos}>Delete my photos</button><button className="primary" disabled={!photos.length} onClick={analyze}>Analyze {photos.length || ""} photo{photos.length === 1 ? "" : "s"} →</button></div>
+    </section>}
 
-      {stage === "identity" && <section className="panel">
-        <StepHeader number="01" title="Who’s entering the arena?" subtitle="The answer stays in this browser unless you explicitly share the result." />
-        <div className="choice-grid">
-          <button className={rating === "myself" ? "choice active" : "choice"} onClick={() => setRating("myself")}><span>☀</span><strong>Rate myself</strong><small>Bold. Efficient. Respect.</small></button>
-          <button className={rating === "partner" ? "choice active" : "choice"} onClick={() => setRating("partner")}><span>♡</span><strong>Rate a consenting partner</strong><small>They are an adult and in on the joke.</small></button>
-        </div>
-        <label className="field"><span>First name or nickname <em>optional</em></span><input value={name} maxLength={24} onChange={(e) => setName(e.target.value)} placeholder="The Oasis Enigma" /></label>
-        <div className="actions"><button className="text-button" onClick={() => setStage("consent")}>← Back</button><button className="primary" onClick={() => setStage("preferences")}>Build preference profile →</button></div>
-      </section>}
+    {stage === "analyzing" && <section className="analysis-stage"><div className="analysis-camels"><div className="inspector"><span className="spectacles">◉ ◉</span><Camel /><i>CLIPBOARD</i></div><div className="rope-camel"><Camel /><span>〰 〰</span></div></div><div className="floating-photos">{photos.map((p) => <img key={p.id} src={p.url} alt="" />)}</div><div className="road-sign">{["Consulting the caravan", "Checking visible evidence", "Observing face & hair", "Reviewing proportions", "Balancing the humps", "Stamping OBSERVED", "Ready for the herd"][status]}</div><div className="analysis-progress"><i style={{ width: `${(status + 1) / 7 * 100}%` }} /></div><p>Observation and scoring are separate. No scientific, biometric, medical, or fertility claims are being made.</p></section>}
 
-      {stage === "preferences" && <section className="panel wide">
-        <StepHeader number="02" title="Desert Preference Profile" subtitle="You set the ideal. The quiz measures proximity—no trait is universally superior." />
-        <label className="skip"><input type="checkbox" checked={skipAppearance} onChange={(e) => setSkipAppearance(e.target.checked)} /><span><strong>Skip appearance scoring</strong><small>Its 65% weight moves proportionally to non-appearance categories.</small></span></label>
-        {!skipAppearance && <div className="preference-grid">
-          {(Object.keys(PREFERENCE_OPTIONS) as PreferenceKey[]).map((key) => <label key={key}>
-            <span>{key.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}</span>
-            <select value={preferences[key] == null ? "none" : preferences[key]} onChange={(e) => setPreference(key, e.target.value)}>
-              <option value="none">No preference</option>
-              {PREFERENCE_OPTIONS[key].map((option, i) => <option value={i} key={option}>{option}</option>)}
-            </select>
-          </label>)}
-        </div>}
-        <details className="weights"><summary>Customize category weights <span>{Object.values(weights).reduce((a, b) => a + b, 0)}% total</span></summary>
-          <div className="weight-grid">{categoryOrder.map((key) => <label key={key}><span>{CATEGORY_META[key].short}</span><input type="number" min="0" max="100" value={weights[key]} onChange={(e) => setWeights({ ...weights, [key]: Number(e.target.value) })} /><i>%</i></label>)}</div>
-          {!validWeightTotal(weights) && <p className="validation">Weights must total exactly 100%.</p>}
-          <button className="text-button" onClick={() => setWeights({ ...DEFAULT_WEIGHTS })}>Reset to dramatic defaults</button>
-        </details>
-        <div className="actions"><button className="text-button" onClick={() => setStage("identity")}>← Back</button><button className="primary" disabled={!validWeightTotal(weights)} onClick={() => setStage("quiz")}>Start the crossing →</button></div>
-      </section>}
+    {stage === "reveal" && result && <section className="reveal"><div className="sandstorm" /><p>THE HERD HAS BEEN CALCULATED</p><div className="rolling-count">{result.camels}</div><Camel className="hero-camel" gold={result.camels >= 180} /><div className="reveal-herd">{Array.from({ length: Math.min(12, Math.ceil(result.camels / 15)) }).map((_, i) => <Camel key={i} gold={result.camels >= 180 && i === 5} />)}</div><button className="primary reveal-button" onClick={() => setStage("result")}>See the desert ledger →</button></section>}
 
-      {stage === "quiz" && <section className="quiz-shell">
-        <div className="map" aria-label={`${progress}% complete`}><div className="map-track"><div className="map-fill" style={{ width: `${progress}%` }} /><Camel className="map-camel" /></div><span>BASE CAMP</span><span>THE OASIS</span></div>
-        <div className="quiz-card" key={current.id}>
-          <div className="category-flag">{CATEGORY_META[current.category].icon} {CATEGORY_META[current.category].label}</div>
-          <div className="question-count">{String(questionIndex + 1).padStart(2, "0")} / {QUESTIONS.length}</div>
-          {current.id === "cooking" && <div className="chef-camel"><Camel /><b>CHEF</b></div>}
-          <span className="question-icon">{current.icon}</span><h2>{current.label}</h2><p>{current.hint}</p>
-          {current.options ? <div className="option-row">{current.options.map((option, i) => <button key={option} className={answers[current.id] === i ? "scale-option selected" : "scale-option"} onClick={() => setAnswers({ ...answers, [current.id]: i })}><span className={`abstract-shape s${i}`} /><strong>{option}</strong></button>)}</div>
-          : <div className="rating-row" role="radiogroup" aria-label={current.label}>{[0,1,2,3,4].map((value) => <button role="radio" aria-checked={answers[current.id] === value} key={value} className={answers[current.id] === value ? "rating selected" : "rating"} onClick={() => setAnswers({ ...answers, [current.id]: value })}><strong>{value + 1}</strong><span>{["Barely", "A little", "Solid", "Excellent", "Legendary"][value]}</span></button>)}</div>}
-          {error && <div className="error" role="alert"><span>💦</span>{error}</div>}
-          <div className="quiz-actions"><button className="text-button" disabled={questionIndex === 0} onClick={() => setQuestionIndex((i) => Math.max(0, i - 1))}>← Previous</button><button className="primary" onClick={nextQuestion}>{questionIndex === QUESTIONS.length - 1 ? "Summon the herd" : "Next crossing"} →</button></div>
-        </div>
-        <div className="preview-herd" aria-hidden="true">{Array.from({ length: Math.min(6, Math.floor(Object.values(answers).filter((v) => v >= 3).length / 2)) }).map((_, i) => <Camel key={i} />)}</div>
-      </section>}
-
-      {stage === "reveal" && <section className="reveal">
-        <div className="sandstorm" /><p>THE HERD IS APPROACHING</p>
-        {countdown > 0 ? <div className="countdown">{countdown}</div> : <><div className="rolling-count">{displayCount}</div><Camel className="hero-camel" /><div className="reveal-herd">{Array.from({ length: Math.min(12, Math.ceil(displayCount / 15)) }).map((_, i) => <Camel key={i} gold={result.camelCount >= 180 && i === 5} />)}</div></>}
-      </section>}
-
-      {stage === "result" && <section className={`result tier-${Math.floor(result.camelCount / 40)}`}>
-        <div className="result-hero">
-          <span className="eyebrow">THE OFFICIAL UNOFFICIAL VERDICT</span>
-          <p>{name || (rating === "myself" ? "You are" : "Your desert companion is")}</p>
-          <div className="big-number">{result.camelCount}</div>
-          <h1>fictional working camels</h1>
-          <h2>{result.tier.title}</h2><p className="result-message">“{result.message}”</p>
-          <Camel className="result-camel" gold={result.camelCount >= 180} />
-        </div>
-        <div className="result-grid">
-          <article className="score-card"><span className="card-label">THE DESERT LEDGER</span><h3>How the herd formed</h3>
-            <div className="bars">{categoryOrder.map((key) => <div className="bar" key={key}><div><span>{CATEGORY_META[key].label}</span><strong>{Math.round(result.categoryScores[key])}</strong></div><i><b style={{ width: `${result.categoryScores[key]}%` }} /></i></div>)}</div>
-            <div className="bonus"><span>✦ Proportion harmony</span><strong>+{result.proportionHarmonyBonus.toFixed(1)}</strong><span>✦ Well-rounded bonus</span><strong>+{result.wellRoundedBonus.toFixed(1)}</strong></div>
-            <details><summary>How it works</summary><p>Each answer is scored against your own preference profile using a bell-shaped fit curve. Exact matches earn the most; nearby answers remain strong; distant answers taper off. Category scores follow your weights, then two small capped bonuses are applied. The final 0–100 entertainment score maps deterministically to 12–220 camels. It is not scientific.</p></details>
-            {process.env.NODE_ENV === "development" && <details><summary>Developer breakdown</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>}
-          </article>
-          <article className="economics"><span className="card-label">IMAGINARY HERD ECONOMICS</span><h3>What might that herd represent?</h3>
-            {[["Low", MARKET_CONFIG.lowUsd], ["Reference", MARKET_CONFIG.referenceUsd], ["High", MARKET_CONFIG.highUsd]].map(([label, raw]) => { const value = Number(raw) * result.camelCount; return <div className="money-row" key={String(label)}><span>{label} herd estimate<small>@ {formatMoney(Number(raw), "USD")} / working camel</small></span><strong>{formatMoney(value, "USD")}<small>{formatMoney(value * MARKET_CONFIG.usdToSar, "SAR")}</small></strong></div>; })}
-            <p className="market-note"><strong>{MARKET_CONFIG.market} · {MARKET_CONFIG.assumptionVersion}</strong><br />Illustrative estimates only. Real camel prices vary substantially by age, health, training, breed, sex, lineage, market conditions, and intended use. Racing, breeding, and prize-winning camels may fall far outside this ordinary working-camel range.</p>
-          </article>
-        </div>
-        <div className="share-card" ref={cardRef}><span>DESERT POSTCARD</span><strong>{result.camelCount}</strong><h3>{result.tier.title}</h3><div className="mini-bars">{categoryOrder.map((key) => <i key={key} style={{ height: `${Math.max(10, result.categoryScores[key])}%` }} />)}</div><small>CAMEL CALCULATOR · FOR ENTERTAINMENT ONLY</small></div>
-        {error && <p className="copy-status" role="status">{error}</p>}
-        <div className="result-actions"><button className="secondary" onClick={downloadCard}>↓ Download postcard</button><button className="primary" onClick={share}>Share the absurdity ↗</button><button className="text-button" onClick={() => setStage("preferences")}>Adjust preferences</button><button className="text-button reset" onClick={restart}><Camel /> Start over</button></div>
-      </section>}
-
-      <footer><strong>Camel Calculator</strong><p>Fictional entertainment for consenting adults. People are not property. Appearance preferences are subjective. Body shape does not establish fertility or childbirth ability. Responses stay in your browser unless you share.</p><button onClick={() => (document.getElementById("safety") as HTMLDialogElement)?.showModal()}>Privacy & safety</button></footer>
-      <dialog id="safety"><button className="dialog-close" onClick={() => (document.getElementById("safety") as HTMLDialogElement)?.close()}>×</button><h2>The serious bit, briefly.</h2><p>This is a fictional, adults-only attraction and compatibility quiz—not a price, diagnosis, fertility assessment, or statement of human worth. Only rate consenting adults who are in on the joke. No answers are sent to a server. Sharing is always your choice.</p></dialog>
-    </main>
-  );
-}
-
-function StepHeader({ number, title, subtitle }: { number: string; title: string; subtitle: string }) {
-  return <header className="step-header"><span>{number}</span><div><p>DESERT CHECKPOINT</p><h1>{title}</h1><small>{subtitle}</small></div></header>;
+    {stage === "result" && result && observation && economics && <section className="result"><div className="result-hero"><span className="eyebrow">VISIBLE-APPEARANCE ENTERTAINMENT RESULT</span><p>{name || "This mysterious traveler"} scored</p><div className="big-number">{result.camels}</div><h1>fictional working camels</h1><h2>{result.tier.title}</h2><p className="result-message">People are not property. This is a subjective visual joke, not a real valuation.</p><Camel className="result-camel" gold={result.camels >= 180} /></div>
+      <div className="result-grid"><article className="score-card"><span className="card-label">VISIBLE TRAIT BREAKDOWN</span><h3>What the caravan could assess</h3>{(Object.keys(labels) as VisualCategory[]).map((key) => <div className="bar" key={key}><div><span>{labels[key]}</span><strong>{result.categoryScores[key] == null ? "Not visible" : Math.round(result.categoryScores[key]!)}</strong></div><i><b style={{ width: `${result.categoryScores[key] ?? 0}%` }} /></i></div>)}<div className="confidence"><strong>Analysis confidence</strong><span>{Math.round(result.confidence * 100)}% · {result.confidence >= .8 ? "High" : "Moderate"}</span></div>{result.missingTraits.length > 0 && <p className="missing"><strong>Could not assess:</strong> {result.missingTraits.join(", ")}</p>}<details><summary>Why this result?</summary><p>Visible observations were matched to the repository’s private rubric. Unknown traits were removed and their weight redistributed within the category. Image quality changed confidence, not attractiveness points. The vision layer never chose a camel count; the deterministic scoring module did.</p></details></article>
+      <article className="economics"><span className="card-label">IMAGINARY HERD ECONOMICS</span><h3>Ordinary working dromedaries</h3>{[["Low", economics.low, economics.lowSar],["Reference", economics.reference, economics.referenceSar],["High", economics.high, economics.highSar]].map(([l,u,s]) => <div className="money-row" key={String(l)}><span>{l} estimate</span><strong>{money(Number(u),"USD")}<small>{money(Number(s),"SAR")}</small></strong></div>)}<p className="market-note">{MARKET_CONFIG.market} · {MARKET_CONFIG.assumptionVersion}. Illustrative only. Racing, breeding, festival, and prize-winning camels may fall far outside this ordinary working-camel range.</p></article></div>
+      <div className="result-actions"><button className="secondary" onClick={downloadCard}>↓ Download privacy-safe card</button><button className="text-button danger" onClick={deletePhotos}>Delete my photos</button><button className="text-button" onClick={restart}>Start over</button></div>
+    </section>}
+    <footer><strong>Camel Calculator</strong><p>Fictional entertainment for consenting adults. No face recognition. No claims about health, fertility, personality, ethnicity, intelligence, maternal ability, or childbirth. Photos are never included in the default share card.</p></footer>
+  </main>;
 }

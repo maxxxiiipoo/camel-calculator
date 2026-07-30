@@ -1,45 +1,52 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_WEIGHTS, QUESTIONS, TIER_CONFIG } from "../lib/config.ts";
-import { calculateScore, normalizeWeights, preferenceFit, validWeightTotal } from "../lib/scoring.ts";
+import { isSafeUpload, validateImageHeader } from "../lib/image.ts";
+import { reconcileObservations } from "../lib/reconcile.ts";
+import { herdEconomics, nonlinearFit, scoreObservation } from "../lib/scoring.ts";
+import type { TraitObservation, VisualObservation } from "../lib/config.ts";
 
-const lowAnswers = Object.fromEntries(QUESTIONS.map((q) => [q.id, 0]));
-const highAnswers = Object.fromEntries(QUESTIONS.map((q) => [q.id, 4]));
-const middleAnswers = Object.fromEntries(QUESTIONS.map((q) => [q.id, 2]));
+const trait = (value: string, confidence = 0.9): TraitObservation => ({ value, confidence, note: "visible" });
+const observation = (confidence = 0.86): VisualObservation => ({
+  face: { visibility: trait("prominent"), apparentSymmetry: trait("prominent"), featureBalance: trait("prominent"), expression: trait("prominent"), eyeVisibility: trait("prominent"), eyeAppearance: trait("prominent") },
+  hair: { color: trait("blonde"), length: trait("long"), texture: trait("wavy"), style: trait("wavy"), presentation: trait("prominent") },
+  physique: { visibility: trait("prominent"), build: trait("moderate"), waistDefinition: trait("prominent"), chestProminence: trait("prominent"), hipProminence: trait("prominent"), gluteProminence: trait("prominent"), proportionalBalance: trait("prominent"), posture: trait("prominent") },
+  style: { clothingPresentation: trait("prominent"), grooming: trait("prominent"), visualCoordination: trait("prominent") },
+  evidence: { faceCoverage: .95, bodyCoverage: .9, obstruction: "low", lightingAdequacy: "prominent", blur: "low", usableViews: 1, overallConfidence: confidence, missingTraits: [], adultConfidence: .98, appropriate: true },
+});
 
-test("default weights total exactly 100", () => assert.equal(validWeightTotal(DEFAULT_WEIGHTS), true));
-test("score and camel output stay within bounds", () => {
-  for (const answers of [lowAnswers, middleAnswers, highAnswers]) {
-    const result = calculateScore(answers, {});
-    assert.ok(result.internalScore >= 0 && result.internalScore <= 100);
-    assert.ok(result.camelCount >= 12 && result.camelCount <= 220);
-  }
+test("validates actual JPEG content and rejects unsupported content", () => {
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0]);
+  assert.equal(validateImageHeader(jpeg, "image/jpeg"), true);
+  assert.equal(validateImageHeader(new Uint8Array([60, 115, 118, 103]), "image/jpeg"), false);
+  assert.equal(isSafeUpload({ size: 100, type: "image/jpeg" }, jpeg), true);
+  assert.equal(isSafeUpload({ size: 100, type: "image/svg+xml" }, jpeg), false);
 });
-test("preference matching is nonlinear and peaks at configured preference", () => {
-  const exact = preferenceFit(2, 2), adjacent = preferenceFit(3, 2), distant = preferenceFit(0, 2);
-  assert.equal(exact, 1); assert.ok(exact > adjacent); assert.ok(adjacent > distant);
-  assert.notEqual(exact - adjacent, adjacent - distant);
+test("nonlinear curves peak at preference and decline past it", () => {
+  assert.equal(nonlinearFit("prominent", "prominent"), 1);
+  assert.ok(nonlinearFit("moderate", "prominent") > nonlinearFit("low", "prominent"));
+  assert.ok(nonlinearFit("very_prominent", "prominent") < 1);
 });
-test("no preference makes all options neutral", () => {
-  assert.equal(preferenceFit(0, null), 1); assert.equal(preferenceFit(3, null), 1);
+test("unknown traits redistribute rather than score negatively", () => {
+  const a = observation(); a.physique.chestProminence = trait("not_visible", .2);
+  const b = observation(); b.physique.chestProminence = trait("low", .9);
+  assert.ok(scoreObservation(a).categoryScores.body! > scoreObservation(b).categoryScores.body!);
 });
-test("skipping appearance redistributes weight and preserves 100 total", () => {
-  const redistributed = normalizeWeights(DEFAULT_WEIGHTS, true);
-  assert.equal(redistributed.physique, 0); assert.equal(redistributed.face, 0);
-  assert.ok(Math.abs(Object.values(redistributed).reduce((a, b) => a + b, 0) - 100) < 0.001);
+test("low confidence is preserved for gating and confidence display", () => {
+  assert.equal(scoreObservation(observation(.4)).confidence, .4);
 });
-test("identical inputs produce deterministic results", () => {
-  assert.deepEqual(calculateScore(middleAnswers, { hips: 2, hair: 1 }), calculateScore(middleAnswers, { hips: 2, hair: 1 }));
+test("multiple photos prefer higher-confidence compatible observations", () => {
+  const a = observation(); a.hair.color = trait("blonde", .55);
+  const b = observation(); b.hair.color = trait("blonde", .95);
+  assert.equal(reconcileObservations([a, b]).hair.color.confidence, .95);
+  assert.equal(reconcileObservations([a, b]).evidence.usableViews, 2);
 });
-test("bonuses are capped and overall result remains capped", () => {
-  const result = calculateScore(highAnswers, {});
-  assert.ok(result.proportionHarmonyBonus <= 5); assert.ok(result.wellRoundedBonus <= 3); assert.ok(result.camelCount <= 220);
+test("scoring is deterministic and bounded", () => {
+  assert.deepEqual(scoreObservation(observation()), scoreObservation(observation()));
+  const result = scoreObservation(observation());
+  assert.ok(result.camels >= 12 && result.camels <= 220);
 });
-test("result tiers cover every camel boundary without gaps", () => {
-  assert.equal(TIER_CONFIG[0].min, 12); assert.equal(TIER_CONFIG.at(-1)?.max, 220);
-  TIER_CONFIG.slice(1).forEach((tier, i) => assert.equal(tier.min, TIER_CONFIG[i].max + 1));
-});
-test("complete quiz input yields all six category scores", () => {
-  const result = calculateScore(middleAnswers, {});
-  assert.equal(Object.keys(result.categoryScores).length, 6); assert.ok(Number.isFinite(result.camelCount));
+test("camel economics use configured USD and SAR conversion", () => {
+  const result = herdEconomics(84);
+  assert.equal(result.low, 168000); assert.equal(result.reference, 504000);
+  assert.equal(result.high, 840000); assert.equal(result.referenceSar, 1890000);
 });

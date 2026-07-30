@@ -1,98 +1,68 @@
-import {
-  CATEGORY_META,
-  DEFAULT_WEIGHTS,
-  QUESTIONS,
-  TIER_CONFIG,
-  type CategoryId,
-  type PreferenceKey,
-} from "./config.ts";
+import { MARKET_CONFIG, VISUAL_RUBRIC, type Level, type TraitObservation, type VisualCategory, type VisualObservation } from "./config.ts";
 
-export type Answers = Record<string, number>;
-export type Preferences = Partial<Record<PreferenceKey, number | null>>;
+const levels: Level[] = ["low", "moderate", "prominent", "very_prominent"];
+const known = (trait: TraitObservation) => trait.value !== "not_visible" && trait.value !== "unknown" && trait.confidence >= 0.45;
 
-export function preferenceFit(answer: number, preference: number | null | undefined, optionCount = 4) {
-  if (preference == null) return 1;
-  const distance = Math.abs(answer - preference);
-  const sigma = Math.max(0.8, optionCount / 3.5);
-  return Math.exp(-(distance * distance) / (2 * sigma * sigma));
+export function nonlinearFit(value: string, preferred: string) {
+  const a = levels.indexOf(value as Level);
+  const b = levels.indexOf(preferred as Level);
+  if (a < 0 || b < 0) return value === preferred ? 1 : 0.45;
+  const distance = Math.abs(a - b);
+  return [VISUAL_RUBRIC.curves.exact, VISUAL_RUBRIC.curves.adjacent, VISUAL_RUBRIC.curves.twoAway, VISUAL_RUBRIC.curves.threeAway][distance] ?? 0;
 }
 
-export function normalizeWeights(
-  weights: Record<CategoryId, number>,
-  skipAppearance: boolean,
-) {
-  const output = { ...weights };
-  if (!skipAppearance) return output;
-  const removed = output.physique + output.face;
-  output.physique = 0;
-  output.face = 0;
-  const remaining = 100 - removed;
-  (["life", "relationship", "nurturing", "personality"] as CategoryId[]).forEach((key) => {
-    output[key] += (output[key] / remaining) * removed;
-  });
-  return output;
+function weightedVisibleScore(entries: { trait: TraitObservation; preferred: string; weight: number }[]) {
+  const visible = entries.filter((entry) => known(entry.trait));
+  const totalWeight = visible.reduce((sum, entry) => sum + entry.weight, 0);
+  if (!totalWeight) return null;
+  return visible.reduce((sum, entry) => sum + nonlinearFit(entry.trait.value, entry.preferred) * (entry.weight / totalWeight), 0) * 100;
 }
 
-export function calculateScore(
-  answers: Answers,
-  preferences: Preferences,
-  weights = DEFAULT_WEIGHTS,
-  skipAppearance = false,
-) {
-  const normalizedWeights = normalizeWeights(weights, skipAppearance);
-  const categoryScores = {} as Record<CategoryId, number>;
-  (Object.keys(CATEGORY_META) as CategoryId[]).forEach((category) => {
-    const questions = QUESTIONS.filter((q) => q.category === category);
-    let earned = 0;
-    let possible = 0;
-    questions.forEach((question) => {
-      const value = answers[question.id] ?? 2;
-      const fit = question.preference
-        ? preferenceFit(value, preferences[question.preference], question.options?.length ?? 4)
-        : value / 4;
-      earned += fit;
-      possible += 1;
-    });
-    categoryScores[category] = possible ? (earned / possible) * 100 : 0;
-  });
-
-  let internalScore = (Object.keys(categoryScores) as CategoryId[]).reduce(
-    (sum, key) => sum + categoryScores[key] * (normalizedWeights[key] / 100),
-    0,
-  );
-  const bodyQuestions = QUESTIONS.filter(
-    (q) => q.category === "physique" && q.preference,
-  );
-  const harmony =
-    bodyQuestions.reduce(
-      (sum, q) =>
-        sum + preferenceFit(answers[q.id] ?? 2, preferences[q.preference!], q.options?.length ?? 4),
-      0,
-    ) / bodyQuestions.length;
-  const proportionHarmonyBonus = skipAppearance ? 0 : Math.min(5, harmony * 5);
-  const activeScores = (Object.keys(categoryScores) as CategoryId[])
-    .filter((key) => normalizedWeights[key] > 0)
-    .map((key) => categoryScores[key]);
-  const spread = Math.max(...activeScores) - Math.min(...activeScores);
-  const wellRoundedBonus = Math.max(0, Math.min(3, (25 - spread) / 8));
-  internalScore = Math.min(100, internalScore + proportionHarmonyBonus + wellRoundedBonus);
-  const camelCount = Math.max(12, Math.min(220, Math.round(12 + internalScore * 2.08)));
-  const hash = Object.keys(answers)
-    .sort()
-    .reduce((acc, key) => (acc * 31 + answers[key] * key.length) >>> 0, 7);
-  const tier = TIER_CONFIG.find((item) => camelCount >= item.min && camelCount <= item.max)!;
-
-  return {
-    internalScore,
-    camelCount,
-    categoryScores,
-    proportionHarmonyBonus,
-    wellRoundedBonus,
-    tier,
-    message: tier.messages[hash % tier.messages.length],
+export function scoreObservation(observation: VisualObservation) {
+  const p = VISUAL_RUBRIC.preferences;
+  const categoryScores: Record<VisualCategory, number | null> = {
+    face: weightedVisibleScore([
+      { trait: observation.face.apparentSymmetry, preferred: p.apparentSymmetry, weight: 30 },
+      { trait: observation.face.featureBalance, preferred: p.featureBalance, weight: 30 },
+      { trait: observation.face.expression, preferred: p.expression, weight: 20 },
+      { trait: observation.face.eyeAppearance, preferred: p.eyeAppearance, weight: 20 },
+    ]),
+    body: weightedVisibleScore(Object.entries(VISUAL_RUBRIC.bodyTraitWeights).map(([key, weight]) => ({
+      trait: observation.physique[key as keyof typeof observation.physique],
+      preferred: p[key as keyof typeof p] as string,
+      weight,
+    }))),
+    hair: weightedVisibleScore([
+      { trait: observation.hair.color, preferred: p.hairColors[0], weight: 35 },
+      { trait: observation.hair.length, preferred: p.hairLengths[0], weight: 20 },
+      { trait: observation.hair.style, preferred: p.hairStyles[0], weight: 25 },
+      { trait: observation.hair.presentation, preferred: "prominent", weight: 20 },
+    ]),
+    style: weightedVisibleScore([
+      { trait: observation.style.clothingPresentation, preferred: p.clothingPresentation, weight: 40 },
+      { trait: observation.style.grooming, preferred: p.grooming, weight: 30 },
+      { trait: observation.style.visualCoordination, preferred: p.visualCoordination, weight: 30 },
+    ]),
+    coherence: weightedVisibleScore([
+      { trait: observation.physique.proportionalBalance, preferred: p.proportionalBalance, weight: 50 },
+      { trait: observation.style.visualCoordination, preferred: p.visualCoordination, weight: 50 },
+    ]),
   };
+  const visibleCategories = (Object.keys(categoryScores) as VisualCategory[]).filter((key) => categoryScores[key] !== null);
+  const categoryWeightTotal = visibleCategories.reduce((sum, key) => sum + VISUAL_RUBRIC.categoryWeights[key], 0);
+  let score = visibleCategories.reduce((sum, key) => sum + categoryScores[key]! * (VISUAL_RUBRIC.categoryWeights[key] / categoryWeightTotal), 0);
+  const harmonyTraits = ["waistDefinition", "hipProminence", "gluteProminence", "chestProminence", "proportionalBalance"] as const;
+  const fits = harmonyTraits
+    .filter((key) => known(observation.physique[key]))
+    .map((key) => nonlinearFit(observation.physique[key].value, p[key]));
+  const harmonyBonus = fits.length >= 3 ? Math.min(VISUAL_RUBRIC.proportionHarmonyBonusCap, (fits.reduce((a, b) => a + b, 0) / fits.length) * 5) : 0;
+  score = Math.min(VISUAL_RUBRIC.overallScoreCap, score + harmonyBonus);
+  const camels = Math.max(VISUAL_RUBRIC.minimumCamelResult, Math.min(VISUAL_RUBRIC.maximumCamelResult, Math.round(12 + score * 2.08)));
+  const tier = VISUAL_RUBRIC.tiers.find((item) => camels >= item.min && camels <= item.max)!;
+  return { score, camels, tier, categoryScores, harmonyBonus, confidence: observation.evidence.overallConfidence, missingTraits: observation.evidence.missingTraits };
 }
 
-export function validWeightTotal(weights: Record<CategoryId, number>) {
-  return Math.abs(Object.values(weights).reduce((a, b) => a + b, 0) - 100) < 0.001;
+export function herdEconomics(camels: number) {
+  const values = { low: camels * MARKET_CONFIG.lowUsd, reference: camels * MARKET_CONFIG.referenceUsd, high: camels * MARKET_CONFIG.highUsd };
+  return { ...values, lowSar: values.low * MARKET_CONFIG.usdToSar, referenceSar: values.reference * MARKET_CONFIG.usdToSar, highSar: values.high * MARKET_CONFIG.usdToSar };
 }
