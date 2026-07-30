@@ -115,3 +115,57 @@ export const UPLOAD_LIMITS = {
   maxDimension: 4096,
   acceptedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
 } as const;
+
+export const LOCAL_MODEL = {
+  id: "Xenova/clip-vit-base-patch32",
+  revision: "d15189d7028b43f1d3e65039190477f6af591c2a",
+  license: "MIT (upstream OpenAI CLIP)",
+  quantization: "q4",
+  estimatedDownloadBytes: 193 * 1024 * 1024,
+  imageResolution: 768,
+  limitations:
+    "A compact zero-shot CLIP observer can miss subtle, obstructed, or out-of-distribution details. Ambiguous traits are marked unknown instead of guessed.",
+} as const;
+
+export function isVisualObservation(value: unknown): value is VisualObservation {
+  const v = value as VisualObservation;
+  const traits = [
+    v?.face?.visibility,
+    v?.face?.apparentSymmetry,
+    v?.face?.featureBalance,
+    v?.face?.expression,
+    v?.face?.eyeVisibility,
+    v?.face?.eyeAppearance,
+    v?.hair?.color,
+    v?.hair?.length,
+    v?.hair?.texture,
+    v?.hair?.style,
+    v?.hair?.presentation,
+    v?.physique?.visibility,
+    v?.physique?.build,
+    v?.physique?.waistDefinition,
+    v?.physique?.chestProminence,
+    v?.physique?.hipProminence,
+    v?.physique?.gluteProminence,
+    v?.physique?.proportionalBalance,
+    v?.physique?.posture,
+    v?.style?.clothingPresentation,
+    v?.style?.grooming,
+    v?.style?.visualCoordination,
+  ];
+  return Boolean(
+    traits.every(
+      (trait) =>
+        trait &&
+        typeof trait.value === "string" &&
+        typeof trait.confidence === "number" &&
+        trait.confidence >= 0 &&
+        trait.confidence <= 1,
+    ) &&
+      v?.evidence &&
+      typeof v.evidence.overallConfidence === "number" &&
+      typeof v.evidence.adultConfidence === "number" &&
+      typeof v.evidence.appropriate === "boolean" &&
+      Array.isArray(v.evidence.missingTraits),
+  );
+}

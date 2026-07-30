@@ -1,53 +1,67 @@
 # Camel Calculator
 
-A deliberately overproduced, adults-only visual attraction game. Users upload one to three appropriate photographs of a consenting adult; an AI observation layer records only visible, non-sensitive traits, then an independent deterministic rubric produces a fictional ordinary-working-camel count.
+A deliberately overproduced, adults-only visual attraction game. Users upload one to three appropriate photographs of a consenting adult; a local open-source model records only visible, non-sensitive traits, then an independent deterministic rubric produces a fictional ordinary-working-camel count.
 
-People are not property. The result is entertainment—not science, a price, identification, a medical assessment, or an inference about health, fertility, ethnicity, personality, intelligence, maternal ability, or childbirth.
+People are not property. The result is entertainment—not science, identification, a price, a medical assessment, or an inference about protected or sensitive characteristics.
 
 ## Local setup
 
-Requires Node.js 22.13+ and an OpenAI API key.
+Requires Node.js 22.13+.
 
 ```bash
 npm install
-cp .env.example .env.local
 npm run dev
 ```
 
-Set `OPENAI_API_KEY` only in the server environment. Never expose it through a `NEXT_PUBLIC_` variable.
+No API key, token, account, secret environment variable, paid service, server inference, or database is required.
+
+## Local observer
+
+- Model: `Xenova/clip-vit-base-patch32`
+- Revision: `d15189d7028b43f1d3e65039190477f6af591c2a`
+- License: MIT (upstream OpenAI CLIP)
+- Runtime: Transformers.js 4, inside a Web Worker
+- Quantization: q4
+- Measured q4 ONNX model: 189,403,477 bytes; UI budget including tokenizer/config: approximately 193 MB
+- Acceleration: WebGPU when available on a device with adequate reported memory; WebAssembly fallback otherwise
+- Cache: browser Cache Storage, managed by Transformers.js
+
+`HuggingFaceTB/SmolVLM-256M-Instruct` and `HuggingFaceTB/SmolVLM2-256M-Video-Instruct` were evaluated with real local inference first. They understood the test image, but repeatedly emitted prose, malformed JSON, copied defaults, or truncated output under constrained schemas. They were rejected rather than masking failures.
+
+CLIP is smaller, has a mature Transformers.js zero-shot image-classification path, and returns numeric label scores instead of unconstrained prose. The worker submits one fixed set of neutral candidate labels, groups the returned scores by trait, applies confidence and ambiguity thresholds, constructs the typed observation schema, and validates it before scoring. Invalid output is retried locally once, then becomes a recoverable error—never a mock result.
+
+Limitations: CLIP can miss subtle, obstructed, or out-of-distribution details and may be slow under WASM, especially on mobile Safari. It is not a face-recognition, age-estimation, medical, or measurement system. Ambiguous traits become `not_visible`.
 
 ## Architecture
 
-- Next.js 16, React 19, TypeScript, Tailwind CSS 4
-- `app/CamelCalculator.tsx`: consent, image preparation, local review/crop/rotation, cinematic states, and local share-card generation
-- `app/api/analyze/route.ts`: upload revalidation, rate limiting, image moderation, temporary model calls, adult/appropriateness/confidence gates
-- `lib/config.ts`: typed observation schema, private owner rubric, weights, tiers, limits, and camel-market assumptions
+- `app/CamelCalculator.tsx`: consent, capability detection, image preparation, worker orchestration, real progress, cache controls, cinematic UI, and local share cards
+- `app/local-observer.worker.ts`: model loading, WebGPU/WASM inference, constrained zero-shot labels, schema construction/validation, retry, and multi-photo observation
+- `lib/config.ts`: typed observation schema, runtime/model metadata, private rubric, weights, tiers, and limits
 - `lib/reconcile.ts`: multi-photo evidence reconciliation
-- `lib/scoring.ts`: pure deterministic custom scoring; the model never awards camels
-- `lib/image.ts`: magic-byte and upload validation
+- `lib/scoring.ts`: pure deterministic camel scoring; the model never awards camels
+- `lib/image.ts`: upload magic-byte validation
+- `public/vendor/wasm`: same-origin ONNX Runtime files so the fallback does not fetch runtime code from a third-party CDN
 
-The private rubric is repository configuration, not public UI. It can later sit behind an authenticated editor without changing observation code.
+There is no analysis API route.
 
-## Privacy and security
+## Privacy
 
-- Selected images are immediately previewed locally and re-encoded through canvas before analysis, stripping EXIF and original filenames.
-- Images are sent as request-scoped data URLs, never placed in object storage, URLs, analytics, logs, or a database.
-- The API requests `store: false`; Camel Calculator does not retain temporary image state after the request.
-- Restart and “Delete my photos” clear browser image state.
-- The default downloadable card is generated locally and never contains the photograph.
-- JPEG, PNG, and WebP are accepted after magic-byte validation. SVG/executable uploads are rejected.
-- Limits: three images, 8 MB input each, 4096 px source dimensions, 1440 px re-encoded output.
-- Moderation, conservative adulthood confidence, general analysis confidence, and per-IP rate limits run before scoring.
-
-Uploaded content is not used for training by this application. Review the configured model provider’s current API data controls before production policy changes.
+- Images are decoded, oriented by the browser image decoder, re-encoded through canvas, cropped, and resized before inference.
+- Original filenames and EXIF are discarded.
+- Prepared image data is transferred only to an in-origin Web Worker.
+- No image is sent to Vercel functions, inference APIs, analytics, storage, URLs, or databases.
+- The only cross-origin inference traffic is the first model download from its public Hugging Face repository.
+- Model/runtime files are cached for repeat and offline visits, subject to browser eviction policy.
+- “Delete my photos” clears image and prepared-buffer state; “Remove downloaded model” clears the model cache where supported.
+- The default result card is generated locally and excludes photos.
 
 ## Scoring
 
-The 100-point index is Face 35%, Body proportions 40%, Hair 10%, Style 10%, and Overall visual coherence 5%. Unknown traits are removed, with their weight redistributed among visible traits in that category. Image quality affects confidence only.
+The visual index remains Face 35%, Body proportions 40%, Hair 10%, Style 10%, and Visual coherence 5%. Unknown traits are removed and weights are redistributed among visible traits in the category. Image quality affects confidence only.
 
-Ordinal traits use nonlinear proximity curves, so the configured preferred level peaks while adjacent and distant values decline. A capped harmony bonus rewards combined alignment. The deterministic 0–100 result maps to 12–220 fictional working camels.
+Ordinal traits use nonlinear proximity curves. A capped harmony bonus rewards combined alignment. The deterministic 0–100 result maps to 12–220 fictional working camels.
 
-Market assumptions remain centralized: USD 2,000 / 6,000 / 10,000 per ordinary working camel, 1 USD = 3.75 SAR, Saudi Arabia context.
+Market assumptions remain USD 2,000 / 6,000 / 10,000 per ordinary working camel, 1 USD = 3.75 SAR, with Saudi Arabia context.
 
 ## Quality checks
 
@@ -60,8 +74,8 @@ npm run build
 npx next build --webpack
 ```
 
-Tests cover real-content upload validation, unsupported files, nonlinear curves, unknown redistribution, low confidence, multi-photo reconciliation, determinism, bounds, herd economics, consent gating, default share-card privacy, deletion/restart, reduced motion, and server data handling.
+Tests cover upload signatures, unsupported files, nonlinear scoring, unknown redistribution, low confidence, multi-photo reconciliation, determinism, score bounds, economics, consent, default share privacy, deletion, reduced motion, output validation, local retry, progress, cancellation, cache removal, and the absence of server inference.
 
-## Deployment
+## Performance instrumentation
 
-Vercel requires a server-side `OPENAI_API_KEY` environment variable. Deploy with `vercel --prod`. The Sites manifest supports the parallel private workspace deployment.
+The app reports the selected backend and measured local analysis time. Transformers.js progress events power byte-level download progress. Browser developer tools can measure first/repeat load, peak memory, and main-thread responsiveness; inference stays in a Worker to keep controls responsive. Hardware and browser storage policies make these values device-specific.

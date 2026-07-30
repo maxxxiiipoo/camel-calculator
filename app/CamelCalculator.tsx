@@ -2,12 +2,13 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MARKET_CONFIG, UPLOAD_LIMITS, type VisualCategory, type VisualObservation } from "../lib/config";
+import { LOCAL_MODEL, MARKET_CONFIG, UPLOAD_LIMITS, VISUAL_RUBRIC, type VisualCategory, type VisualObservation } from "../lib/config";
 import { herdEconomics, scoreObservation } from "../lib/scoring";
 
 type Stage = "landing" | "consent" | "upload" | "analyzing" | "reveal" | "result";
 type Motion = "full" | "reduced" | "off";
 type Photo = { id: string; url: string; dataUrl: string; rotation: number; zoom: number };
+type ObserverPhase = "idle" | "downloading" | "loading" | "analyzing";
 
 const labels: Record<VisualCategory, string> = { face: "Face & harmony", body: "Body proportions", hair: "Hair", style: "Style", coherence: "Visual coherence" };
 const money = (value: number, currency: "USD" | "SAR") => new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
@@ -52,13 +53,91 @@ export default function CamelCalculator() {
   const [name, setName] = useState("");
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState(0);
+  const [observerPhase, setObserverPhase] = useState<ObserverPhase>("idle");
+  const [downloadedBytes, setDownloadedBytes] = useState(0);
+  const [downloadTotal, setDownloadTotal] = useState(LOCAL_MODEL.estimatedDownloadBytes);
+  const [backend, setBackend] = useState<"webgpu" | "wasm">("wasm");
+  const [modelCached, setModelCached] = useState(false);
+  const [metrics, setMetrics] = useState<{ analysisMs: number; backend: string } | null>(null);
   const [error, setError] = useState("");
   const [observation, setObservation] = useState<VisualObservation | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const backendRef = useRef<"webgpu" | "wasm">("wasm");
+  const preparedRef = useRef<string[]>([]);
+  const progressRef = useRef(new Map<string, { loaded: number; total: number }>());
   const result = useMemo(() => observation ? scoreObservation(observation) : null, [observation]);
   const economics = result ? herdEconomics(result.camels) : null;
 
   useEffect(() => { document.documentElement.dataset.motion = motion; }, [motion]);
+  useEffect(() => () => workerRef.current?.terminate(), []);
+  useEffect(() => {
+    if (stage === "upload" && "caches" in window) {
+      caches.has("transformers-cache").then(setModelCached);
+    }
+  }, [stage]);
+
+  function createObserverWorker() {
+    workerRef.current?.terminate();
+    const worker = new Worker(new URL("./local-observer.worker.ts", import.meta.url), { type: "module" });
+    workerRef.current = worker;
+    worker.onmessage = (event: MessageEvent) => {
+      const message = event.data;
+      if (message.type === "phase") setObserverPhase(message.phase);
+      if (message.type === "progress") {
+        const item = message.event;
+        if (item.status === "progress" && typeof item.loaded === "number") {
+          progressRef.current.set(item.file ?? crypto.randomUUID(), { loaded: item.loaded, total: item.total ?? 0 });
+          const values = [...progressRef.current.values()];
+          setDownloadedBytes(values.reduce((sum, value) => sum + value.loaded, 0));
+          const total = values.reduce((sum, value) => sum + value.total, 0);
+          if (total > 0) setDownloadTotal(total);
+        }
+      }
+      if (message.type === "ready") {
+        backendRef.current = message.backend;
+        setBackend(message.backend);
+        setModelCached(true);
+        worker.postMessage({ type: "analyze", images: preparedRef.current });
+      }
+      if (message.type === "photo") setStatus(message.index);
+      if (message.type === "retry") setStatus(message.index);
+      if (message.type === "complete") {
+        const value = message.observation as VisualObservation;
+        setMetrics(message.metrics);
+        if (!value.evidence.appropriate || value.evidence.adultConfidence < VISUAL_RUBRIC.minimumAdultConfidence) {
+          setError("The local observer cannot establish that this is a clearly adult, appropriate photograph. Try a clearer photo of a consenting adult.");
+          setStage("upload");
+          return;
+        }
+        if (value.evidence.overallConfidence < VISUAL_RUBRIC.minimumAnalysisConfidence) {
+          setError("There is not enough visible information for a defensible result. Add a clearer face or full-body photograph.");
+          setStage("upload");
+          return;
+        }
+        setObservation(value);
+        setStage(motion === "off" ? "result" : "reveal");
+      }
+      if (message.type === "cache-status") setModelCached(Boolean(message.cached));
+      if (message.type === "cache-cleared") setModelCached(false);
+      if (message.type === "error") {
+        if (backendRef.current === "webgpu") {
+          backendRef.current = "wasm";
+          setBackend("wasm");
+          setObserverPhase("loading");
+          createObserverWorker().postMessage({ type: "load", device: "wasm" });
+          return;
+        }
+        setError(message.message || "Local analysis failed. Try again or use a clearer photograph.");
+        setStage("upload");
+      }
+    };
+    worker.onerror = () => {
+      setError("This device could not start the private local observer.");
+      setStage("upload");
+    };
+    return worker;
+  }
 
   async function addFiles(files: FileList | File[]) {
     setError("");
@@ -77,26 +156,45 @@ export default function CamelCalculator() {
     const rotation = (photo.rotation + 90) % 360; const dataUrl = await sanitizeImage(file, 90);
     setPhotos((items) => items.map((p) => p.id === photo.id ? { ...p, rotation, dataUrl, url: dataUrl } : p));
   }
-  function deletePhotos() { setPhotos([]); setObservation(null); setError(""); setStage("upload"); }
-  function restart() { setPhotos([]); setObservation(null); setError(""); setName(""); setConsents([false, false, false, false, false]); setStage("landing"); }
+  function deletePhotos() {
+    workerRef.current?.postMessage({ type: "cancel" });
+    preparedRef.current = [];
+    setPhotos([]); setObservation(null); setError(""); setStage("upload");
+  }
+  function restart() {
+    preparedRef.current = [];
+    setPhotos([]); setObservation(null); setError(""); setName(""); setConsents([false, false, false, false, false]); setStage("landing");
+  }
 
   async function analyze() {
-    setStage("analyzing"); setStatus(0); setError("");
-    const timer = window.setInterval(() => setStatus((s) => Math.min(5, s + 1)), 900);
+    setStage("analyzing"); setStatus(0); setError(""); setObserverPhase("downloading");
+    setDownloadedBytes(0); progressRef.current.clear();
     try {
-      const preparedImages = await Promise.all(photos.map(async (photo) => {
+      preparedRef.current = await Promise.all(photos.map(async (photo) => {
         const response = await fetch(photo.dataUrl);
         const file = new File([await response.blob()], "sanitized.jpg", { type: "image/jpeg" });
         return sanitizeImage(file, 0, photo.zoom);
       }));
-      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ images: preparedImages }) });
-      const body = await response.json() as { observation?: VisualObservation; error?: string };
-      if (!response.ok || !body.observation) throw new Error(body.error || "The caravan could not finish the analysis.");
-      setObservation(body.observation); setStatus(6);
-      window.setTimeout(() => setStage(motion === "off" ? "result" : "reveal"), motion === "off" ? 0 : 700);
+      const capability = navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> }; deviceMemory?: number };
+      const canWebGpu = Boolean(capability.gpu && (capability.deviceMemory == null || capability.deviceMemory >= 4));
+      const selectedBackend = canWebGpu ? "webgpu" : "wasm";
+      backendRef.current = selectedBackend;
+      setBackend(selectedBackend);
+      createObserverWorker().postMessage({ type: "load", device: selectedBackend });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Analysis failed."); setStage("upload");
-    } finally { window.clearInterval(timer); }
+    }
+  }
+  function cancelAnalysis() {
+    workerRef.current?.postMessage({ type: "cancel" });
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    setError("Local analysis was cancelled. Partially downloaded files may remain cached.");
+    setStage("upload");
+  }
+  function removeDownloadedModel() {
+    const worker = workerRef.current ?? createObserverWorker();
+    worker.postMessage({ type: "clear-cache" });
   }
   function downloadCard() {
     if (!result) return;
@@ -133,22 +231,24 @@ export default function CamelCalculator() {
         <Camel /><strong>{photos.length ? "Add another angle" : "Drop photographs into the desert"}</strong><span>or tap to choose from your device</span><small>JPEG, PNG, WebP · 8 MB each · up to 4096 px</small>
         <input ref={inputRef} hidden type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple onChange={(e) => e.target.files && addFiles(e.target.files)} />
       </div>
-      <aside className="privacy-note"><strong>☾ Your photos are private cargo.</strong><p>They are re-encoded in your browser to strip metadata, sent only for this analysis, never placed in public storage, never added to the share card, and not retained by Camel Calculator. Restart deletes local photo state.</p></aside>
+      <aside className="privacy-note"><strong>☾ Private local analysis: your photo never leaves this device.</strong><p>Photos are re-encoded to strip metadata and analyzed inside a Web Worker. No image is sent to Camel Calculator, Vercel, an inference API, analytics, or a database. The first analysis downloads the open-source observer once (about {Math.round(LOCAL_MODEL.estimatedDownloadBytes / 1024 / 1024)} MB) and caches it in this browser.</p></aside>
       {photos.length > 0 && <div className="photo-grid">{photos.map((photo, i) => <article className="photo-card" key={photo.id}><div className="photo-frame"><img src={photo.url} alt={`Selected photograph ${i + 1}`} style={{ transform: `scale(${photo.zoom})` }} /></div><div><strong>VIEW {i + 1}</strong><button onClick={() => rotatePhoto(photo)}>↻ Rotate</button><label>Crop <input aria-label={`Crop photo ${i + 1}`} type="range" min="1" max="1.6" step=".1" value={photo.zoom} onChange={(e) => setPhotos((items) => items.map((p) => p.id === photo.id ? { ...p, zoom: Number(e.target.value) } : p))} /></label><button onClick={() => removePhoto(photo.id)}>Remove</button></div></article>)}</div>}
       {error && <div className="error" role="alert">{error}</div>}
       <label className="field nickname"><span>Nickname <em>optional</em></span><input value={name} maxLength={24} onChange={(e) => setName(e.target.value)} placeholder="The Oasis Enigma" /></label>
-      <div className="actions"><button className="text-button danger" disabled={!photos.length} onClick={deletePhotos}>Delete my photos</button><button className="primary" disabled={!photos.length} onClick={analyze}>Analyze {photos.length || ""} photo{photos.length === 1 ? "" : "s"} →</button></div>
+      <div className="model-facts"><span><strong>{LOCAL_MODEL.id.split("/")[1]}</strong> · q4 · {LOCAL_MODEL.license}</span><small>{modelCached ? "Observer cached for repeat visits." : `First-run download: approximately ${Math.round(LOCAL_MODEL.estimatedDownloadBytes / 1024 / 1024)} MB.`}</small>{modelCached && <button className="text-button danger" onClick={removeDownloadedModel}>Remove downloaded model</button>}</div>
+      <div className="actions"><button className="text-button danger" disabled={!photos.length} onClick={deletePhotos}>Delete my photos</button><button className="primary" disabled={!photos.length} onClick={analyze}>Analyze {photos.length || ""} photo{photos.length === 1 ? "" : "s"} locally →</button></div>
     </section>}
 
-    {stage === "analyzing" && <section className="analysis-stage"><div className="analysis-camels"><div className="inspector"><span className="spectacles">◉ ◉</span><Camel /><i>CLIPBOARD</i></div><div className="rope-camel"><Camel /><span>〰 〰</span></div></div><div className="floating-photos">{photos.map((p) => <img key={p.id} src={p.url} alt="" />)}</div><div className="road-sign">{["Consulting the caravan", "Checking visible evidence", "Observing face & hair", "Reviewing proportions", "Balancing the humps", "Stamping OBSERVED", "Ready for the herd"][status]}</div><div className="analysis-progress"><i style={{ width: `${(status + 1) / 7 * 100}%` }} /></div><p>Observation and scoring are separate. No scientific, biometric, medical, or fertility claims are being made.</p></section>}
+    {stage === "analyzing" && <section className="analysis-stage"><div className="analysis-camels"><div className="inspector"><span className="spectacles">◉ ◉</span><Camel /><i>CLIPBOARD</i></div><div className="rope-camel"><Camel /><span>〰 〰</span></div></div><div className="floating-photos">{photos.map((p) => <img key={p.id} src={p.url} alt="" />)}</div><div className="road-sign">{observerPhase === "downloading" ? "Downloading observer" : observerPhase === "loading" ? "Loading observer" : `Analyzing photo ${status + 1} of ${photos.length}`}</div>{observerPhase === "downloading" && <><div className="analysis-progress" aria-label={`${Math.round(downloadedBytes / Math.max(downloadTotal, 1) * 100)}% downloaded`}><i style={{ width: `${Math.min(100, downloadedBytes / Math.max(downloadTotal, 1) * 100)}%` }} /></div><strong>{Math.round(downloadedBytes / 1024 / 1024)} / {Math.round(downloadTotal / 1024 / 1024)} MB</strong><small>Downloaded once and cached by your browser.</small></>}<p>Using {backend === "webgpu" ? "WebGPU acceleration" : "WebAssembly fallback"}. Observation and deterministic scoring remain separate.</p><button className="secondary" onClick={cancelAnalysis}>Cancel</button></section>}
 
     {stage === "reveal" && result && <section className="reveal"><div className="sandstorm" /><p>THE HERD HAS BEEN CALCULATED</p><div className="rolling-count">{result.camels}</div><Camel className="hero-camel" gold={result.camels >= 180} /><div className="reveal-herd">{Array.from({ length: Math.min(12, Math.ceil(result.camels / 15)) }).map((_, i) => <Camel key={i} gold={result.camels >= 180 && i === 5} />)}</div><button className="primary reveal-button" onClick={() => setStage("result")}>See the desert ledger →</button></section>}
 
     {stage === "result" && result && observation && economics && <section className="result"><div className="result-hero"><span className="eyebrow">VISIBLE-APPEARANCE ENTERTAINMENT RESULT</span><p>{name || "This mysterious traveler"} scored</p><div className="big-number">{result.camels}</div><h1>fictional working camels</h1><h2>{result.tier.title}</h2><p className="result-message">People are not property. This is a subjective visual joke, not a real valuation.</p><Camel className="result-camel" gold={result.camels >= 180} /></div>
       <div className="result-grid"><article className="score-card"><span className="card-label">VISIBLE TRAIT BREAKDOWN</span><h3>What the caravan could assess</h3>{(Object.keys(labels) as VisualCategory[]).map((key) => <div className="bar" key={key}><div><span>{labels[key]}</span><strong>{result.categoryScores[key] == null ? "Not visible" : Math.round(result.categoryScores[key]!)}</strong></div><i><b style={{ width: `${result.categoryScores[key] ?? 0}%` }} /></i></div>)}<div className="confidence"><strong>Analysis confidence</strong><span>{Math.round(result.confidence * 100)}% · {result.confidence >= .8 ? "High" : "Moderate"}</span></div>{result.missingTraits.length > 0 && <p className="missing"><strong>Could not assess:</strong> {result.missingTraits.join(", ")}</p>}<details><summary>Why this result?</summary><p>Visible observations were matched to the repository’s private rubric. Unknown traits were removed and their weight redistributed within the category. Image quality changed confidence, not attractiveness points. The vision layer never chose a camel count; the deterministic scoring module did.</p></details></article>
       <article className="economics"><span className="card-label">IMAGINARY HERD ECONOMICS</span><h3>Ordinary working dromedaries</h3>{[["Low", economics.low, economics.lowSar],["Reference", economics.reference, economics.referenceSar],["High", economics.high, economics.highSar]].map(([l,u,s]) => <div className="money-row" key={String(l)}><span>{l} estimate</span><strong>{money(Number(u),"USD")}<small>{money(Number(s),"SAR")}</small></strong></div>)}<p className="market-note">{MARKET_CONFIG.market} · {MARKET_CONFIG.assumptionVersion}. Illustrative only. Racing, breeding, festival, and prize-winning camels may fall far outside this ordinary working-camel range.</p></article></div>
+      {metrics && <p className="local-metrics">Local observer: {metrics.backend.toUpperCase()} · analysis {(metrics.analysisMs / 1000).toFixed(1)}s · images never left this device</p>}
       <div className="result-actions"><button className="secondary" onClick={downloadCard}>↓ Download privacy-safe card</button><button className="text-button danger" onClick={deletePhotos}>Delete my photos</button><button className="text-button" onClick={restart}>Start over</button></div>
     </section>}
-    <footer><strong>Camel Calculator</strong><p>Fictional entertainment for consenting adults. No face recognition. No claims about health, fertility, personality, ethnicity, intelligence, maternal ability, or childbirth. Photos are never included in the default share card.</p></footer>
+    <footer><strong>Camel Calculator</strong><p>Fictional entertainment for consenting adults. Private local analysis; photos never leave the device. No face recognition. No claims about health, fertility, personality, ethnicity, intelligence, maternal ability, or childbirth.</p></footer>
   </main>;
 }
