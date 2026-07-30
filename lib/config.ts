@@ -87,7 +87,7 @@ export const VISUAL_RUBRIC = {
   minimumCamelResult: 12,
   maximumCamelResult: 220,
   minimumAnalysisConfidence: 0.62,
-  minimumAdultConfidence: 0.9,
+  minimumAdultConfidence: 0.75,
   proportionHarmonyBonusCap: 5,
   overallScoreCap: 100,
   tiers: [

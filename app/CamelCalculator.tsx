@@ -117,7 +117,7 @@ export default function CamelCalculator() {
         const value = message.observation as VisualObservation;
         setMetrics(message.metrics);
         if (!value.evidence.appropriate || value.evidence.adultConfidence < VISUAL_RUBRIC.minimumAdultConfidence) {
-          setError("The local observer cannot establish that this is a clearly adult, appropriate photograph. Try a clearer photo of a consenting adult.");
+          setError("This photo triggered a strong possible-minor, no-person, or explicit-content warning. No score was produced. Try a different appropriate photo of the consenting adult.");
           setStage("upload");
           return;
         }

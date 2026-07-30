@@ -155,6 +155,16 @@ function buildObservation(results: RankedLabel[]): VisualObservation {
     ? ["faceVisibility", "bodyVisibility", "lighting", "blur", "obstruction"].map((group) => pick(group, true).confidence)
     : [0];
   const overallConfidence = allConfidence.reduce((sum, value) => sum + value, 0) / allConfidence.length;
+  const strongMinorEvidence = adult.value === "minor" && adult.confidence >= 0.55;
+  const noPersonEvidence = adult.value === "none" && adult.confidence >= 0.55;
+  const explicitEvidence = safety.value === "explicit" && safety.confidence >= 0.62;
+  // The user's explicit 18+ attestation is the primary age confirmation.
+  // CLIP is not an age estimator; it is used only to veto strong minor/no-person evidence.
+  const adultConfidence = strongMinorEvidence || noPersonEvidence
+    ? Math.max(0, 1 - adult.confidence)
+    : adult.value === "adult"
+      ? 0.95
+      : 0.82;
 
   const observation: VisualObservation = {
     face: {
@@ -196,8 +206,8 @@ function buildObservation(results: RankedLabel[]): VisualObservation {
       usableViews: 1,
       overallConfidence,
       missingTraits,
-      adultConfidence: adult.value === "adult" ? adult.confidence : 1 - adult.confidence,
-      appropriate: adult.value === "adult" && safety.value === "appropriate" && safety.confidence >= 0.55,
+      adultConfidence,
+      appropriate: !strongMinorEvidence && !noPersonEvidence && !explicitEvidence,
     },
   };
   if (!isVisualObservation(observation)) throw new Error("Local observer produced invalid structured output");
