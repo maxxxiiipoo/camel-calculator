@@ -40,5 +40,7 @@ test("model cache has real progress, cancellation, and removal", () => {
 });
 test("photos are never sent through fetch to an analysis service", () => {
   assert.doesNotMatch(source, /fetch\("\/api\/analyze"/);
+  assert.doesNotMatch(source, /fetch\(photo\.dataUrl\)/);
+  assert.match(source, /sanitizedDataUrlToFile/);
   assert.doesNotMatch(worker, /api\.openai|inference-api|console\.log/);
 });

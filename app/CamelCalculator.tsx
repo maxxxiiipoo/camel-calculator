@@ -43,6 +43,17 @@ async function sanitizeImage(file: File, rotation = 0, zoom = 1) {
   return canvas.toDataURL("image/jpeg", 0.86);
 }
 
+function sanitizedDataUrlToFile(dataUrl: string) {
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0 || !dataUrl.startsWith("data:image/jpeg;base64,")) {
+    throw new Error("The prepared photograph is invalid. Remove it and upload it again.");
+  }
+  const binary = atob(dataUrl.slice(comma + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new File([bytes], "sanitized.jpg", { type: "image/jpeg" });
+}
+
 export default function CamelCalculator() {
   const [stage, setStage] = useState<Stage>("landing");
   const [motion, setMotion] = useState<Motion>(() =>
@@ -152,7 +163,7 @@ export default function CamelCalculator() {
   }
   function removePhoto(id: string) { setPhotos((items) => items.filter((p) => p.id !== id)); }
   async function rotatePhoto(photo: Photo) {
-    const response = await fetch(photo.dataUrl); const file = new File([await response.blob()], "photo.jpg", { type: "image/jpeg" });
+    const file = sanitizedDataUrlToFile(photo.dataUrl);
     const rotation = (photo.rotation + 90) % 360; const dataUrl = await sanitizeImage(file, 90);
     setPhotos((items) => items.map((p) => p.id === photo.id ? { ...p, rotation, dataUrl, url: dataUrl } : p));
   }
@@ -171,8 +182,7 @@ export default function CamelCalculator() {
     setDownloadedBytes(0); progressRef.current.clear();
     try {
       preparedRef.current = await Promise.all(photos.map(async (photo) => {
-        const response = await fetch(photo.dataUrl);
-        const file = new File([await response.blob()], "sanitized.jpg", { type: "image/jpeg" });
+        const file = sanitizedDataUrlToFile(photo.dataUrl);
         return sanitizeImage(file, 0, photo.zoom);
       }));
       const capability = navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> }; deviceMemory?: number };
