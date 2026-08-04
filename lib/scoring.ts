@@ -27,10 +27,15 @@ function calibratedScore(score: number, confidence: number) {
   return Math.max(0, Math.min(100, 50 + (score - 50) * confidenceFactor));
 }
 
-function camelsFromScore(score: number) {
+export function camelsFromScore(score: number) {
+  const normalized = Math.max(0, Math.min(100, score)) / 100;
+  const range = VISUAL_RUBRIC.maximumCamelResult - VISUAL_RUBRIC.minimumCamelResult;
   return Math.max(
     VISUAL_RUBRIC.minimumCamelResult,
-    Math.min(VISUAL_RUBRIC.maximumCamelResult, Math.round(12 + score * 2.08)),
+    Math.min(
+      VISUAL_RUBRIC.maximumCamelResult,
+      Math.round(VISUAL_RUBRIC.minimumCamelResult + range * normalized ** VISUAL_RUBRIC.camelResultCurveExponent),
+    ),
   );
 }
 

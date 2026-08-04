@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { isSafeUpload, validateImageHeader } from "../lib/image.ts";
 import { reconcileObservations } from "../lib/reconcile.ts";
-import { herdEconomics, nonlinearFit, scoreObservation } from "../lib/scoring.ts";
+import { camelsFromScore, herdEconomics, nonlinearFit, scoreObservation } from "../lib/scoring.ts";
 import type { TraitObservation, VisualObservation } from "../lib/config.ts";
 
 const trait = (value: string, confidence = 0.9): TraitObservation => ({ value, confidence, note: "visible" });
@@ -46,6 +46,13 @@ test("scoring is deterministic and bounded", () => {
   assert.ok(result.camels >= 12 && result.camels <= 220);
   assert.ok(result.faceCamels! >= 12 && result.faceCamels! <= 220);
   assert.ok(result.bodyCamels! >= 12 && result.bodyCamels! <= 220);
+});
+test("camel conversion deflates average scores and reserves large herds for standouts", () => {
+  assert.equal(camelsFromScore(0), 12);
+  assert.ok(camelsFromScore(50) >= 55 && camelsFromScore(50) <= 60);
+  assert.ok(camelsFromScore(60) < 100);
+  assert.ok(camelsFromScore(70) > 100);
+  assert.equal(camelsFromScore(100), 220);
 });
 test("confidence calibration stays bounded and body can be absent", () => {
   const high = observation(.2);

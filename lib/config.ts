@@ -96,6 +96,7 @@ export const VISUAL_RUBRIC = {
   curves: { exact: 1, adjacent: 0.68, twoAway: 0.18, threeAway: 0.04 },
   minimumCamelResult: 12,
   maximumCamelResult: 220,
+  camelResultCurveExponent: 2.2,
   minimumAdultConfidence: 0.75,
   proportionHarmonyBonusCap: 5,
   overallScoreCap: 100,
