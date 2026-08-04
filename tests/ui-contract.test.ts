@@ -34,6 +34,10 @@ test("model output is validated and locally retried", () => {
   assert.match(worker, /isVisualObservation\(observation\)/);
   assert.equal(isVisualObservation({ random: true }), false);
 });
+test("low photo coverage does not block a result", () => {
+  assert.doesNotMatch(source, /not enough visible information|defensible result|minimumAnalysisConfidence/i);
+  assert.match(source, /setObservation\(value\)/);
+});
 test("model cache has real progress, cancellation, and removal", () => {
   assert.match(source, /item\.status === "progress"/);
   assert.match(source, /Cancel/); assert.match(source, /Remove downloaded model/);

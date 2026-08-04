@@ -121,11 +121,6 @@ export default function CamelCalculator() {
           setStage("upload");
           return;
         }
-        if (value.evidence.overallConfidence < VISUAL_RUBRIC.minimumAnalysisConfidence) {
-          setError("There is not enough visible information for a defensible result. Add a clearer face or full-body photograph.");
-          setStage("upload");
-          return;
-        }
         setObservation(value);
         setStage(motion === "off" ? "result" : "reveal");
       }
