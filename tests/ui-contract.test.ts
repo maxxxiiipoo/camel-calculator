@@ -39,6 +39,15 @@ test("low photo coverage does not block a result", () => {
   assert.doesNotMatch(source, /not enough visible information|defensible result|minimumAnalysisConfidence/i);
   assert.match(source, /setObservation\(value\)/);
 });
+test("face and body visibility use multiple observation signals", () => {
+  assert.match(worker, /visibleSignalCount/);
+  assert.match(worker, /faceVisible = coverage\(faceVisibility\.value\) >= 0\.2/);
+  assert.match(worker, /bodyVisible = coverage\(bodyVisibility\.value\) >= 0\.2/);
+  assert.match(source, /Strong preference match/);
+  assert.match(source, /Chest prominence/);
+  assert.match(source, /Hip prominence/);
+  assert.match(source, /Glute prominence/);
+});
 test("model cache has real progress, cancellation, and removal", () => {
   assert.match(source, /item\.status === "progress"/);
   assert.match(source, /Cancel/); assert.match(source, /Remove downloaded model/);

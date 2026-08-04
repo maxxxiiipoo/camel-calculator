@@ -117,7 +117,7 @@ function choose(results: RankedLabel[], group: string, force = false): Choice {
   const normalized = top.score / total;
   const runnerUp = (ranked[1]?.score ?? 0) / total;
   const confidence = Math.max(0, Math.min(1, normalized));
-  if (!force && (confidence < 0.31 || confidence - runnerUp < 0.045)) {
+  if (!force && (confidence < 0.27 || confidence - runnerUp < 0.02)) {
     return { value: "not_visible", confidence };
   }
   return { value: top.value, confidence };
@@ -138,10 +138,40 @@ function buildObservation(results: RankedLabel[]): VisualObservation {
   const pick = (group: string, force = false) => choose(results, group, force);
   const adult = pick("adult", true);
   const safety = pick("safety", true);
-  const faceVisibility = pick("faceVisibility", true);
-  const bodyVisibility = pick("bodyVisibility", true);
-  const faceVisible = coverage(faceVisibility.value) >= 0.5;
-  const bodyVisible = coverage(bodyVisibility.value) >= 0.5;
+  let faceVisibility = pick("faceVisibility", true);
+  let bodyVisibility = pick("bodyVisibility", true);
+  const faceChoices = {
+    symmetry: pick("symmetry"),
+    featureBalance: pick("featureBalance"),
+    expression: pick("expression"),
+    eyeVisibility: pick("eyeVisibility"),
+    eyeAppearance: pick("eyeAppearance"),
+    hairColor: pick("hairColor"),
+    hairLength: pick("hairLength"),
+    hairStyle: pick("hairStyle"),
+    hairPresentation: pick("hairPresentation"),
+  };
+  const bodyChoices = {
+    build: pick("build"),
+    waistDefinition: pick("waistDefinition"),
+    chestProminence: pick("chestProminence"),
+    hipProminence: pick("hipProminence"),
+    gluteProminence: pick("gluteProminence"),
+    proportionalBalance: pick("proportionalBalance"),
+    posture: pick("posture"),
+    clothingPresentation: pick("clothingPresentation"),
+    visualCoordination: pick("visualCoordination"),
+  };
+  const visibleSignalCount = (choices: Record<string, Choice>) => Object.values(choices)
+    .filter((choice) => choice.value !== "not_visible" && choice.confidence >= 0.27).length;
+  const faceVisible = coverage(faceVisibility.value) >= 0.2 || visibleSignalCount(faceChoices) >= 2;
+  const bodyVisible = coverage(bodyVisibility.value) >= 0.2 || visibleSignalCount(bodyChoices) >= 2;
+  if (faceVisible && coverage(faceVisibility.value) < 0.5) {
+    faceVisibility = { value: "moderate", confidence: Math.max(faceVisibility.confidence, ...Object.values(faceChoices).map((choice) => choice.confidence)) };
+  }
+  if (bodyVisible && coverage(bodyVisibility.value) < 0.5) {
+    bodyVisibility = { value: "moderate", confidence: Math.max(bodyVisibility.confidence, ...Object.values(bodyChoices).map((choice) => choice.confidence)) };
+  }
   const missingTraits: string[] = [];
   const tracked = (path: string, choice: Choice, visible = true) => {
     const result = trait(choice, visible);
@@ -164,33 +194,33 @@ function buildObservation(results: RankedLabel[]): VisualObservation {
   const observation: VisualObservation = {
     face: {
       visibility: tracked("face.visibility", faceVisibility),
-      apparentSymmetry: tracked("face.apparentSymmetry", pick("symmetry"), faceVisible),
-      featureBalance: tracked("face.featureBalance", pick("featureBalance"), faceVisible),
-      expression: tracked("face.expression", pick("expression"), faceVisible),
-      eyeVisibility: tracked("face.eyeVisibility", pick("eyeVisibility"), faceVisible),
-      eyeAppearance: tracked("face.eyeAppearance", pick("eyeAppearance"), faceVisible),
+      apparentSymmetry: tracked("face.apparentSymmetry", faceChoices.symmetry, faceVisible),
+      featureBalance: tracked("face.featureBalance", faceChoices.featureBalance, faceVisible),
+      expression: tracked("face.expression", faceChoices.expression, faceVisible),
+      eyeVisibility: tracked("face.eyeVisibility", faceChoices.eyeVisibility, faceVisible),
+      eyeAppearance: tracked("face.eyeAppearance", faceChoices.eyeAppearance, faceVisible),
     },
     hair: {
-      color: tracked("hair.color", pick("hairColor"), faceVisible),
-      length: tracked("hair.length", pick("hairLength"), faceVisible),
-      texture: tracked("hair.texture", pick("hairStyle"), faceVisible),
-      style: tracked("hair.style", pick("hairStyle"), faceVisible),
-      presentation: tracked("hair.presentation", pick("hairPresentation"), faceVisible),
+      color: tracked("hair.color", faceChoices.hairColor, faceVisible),
+      length: tracked("hair.length", faceChoices.hairLength, faceVisible),
+      texture: tracked("hair.texture", faceChoices.hairStyle, faceVisible),
+      style: tracked("hair.style", faceChoices.hairStyle, faceVisible),
+      presentation: tracked("hair.presentation", faceChoices.hairPresentation, faceVisible),
     },
     physique: {
       visibility: tracked("physique.visibility", bodyVisibility),
-      build: tracked("physique.build", pick("build"), bodyVisible),
-      waistDefinition: tracked("physique.waistDefinition", pick("waistDefinition"), bodyVisible),
-      chestProminence: tracked("physique.chestProminence", pick("chestProminence"), bodyVisible),
-      hipProminence: tracked("physique.hipProminence", pick("hipProminence"), bodyVisible),
-      gluteProminence: tracked("physique.gluteProminence", pick("gluteProminence"), bodyVisible),
-      proportionalBalance: tracked("physique.proportionalBalance", pick("proportionalBalance"), bodyVisible),
-      posture: tracked("physique.posture", pick("posture"), bodyVisible),
+      build: tracked("physique.build", bodyChoices.build, bodyVisible),
+      waistDefinition: tracked("physique.waistDefinition", bodyChoices.waistDefinition, bodyVisible),
+      chestProminence: tracked("physique.chestProminence", bodyChoices.chestProminence, bodyVisible),
+      hipProminence: tracked("physique.hipProminence", bodyChoices.hipProminence, bodyVisible),
+      gluteProminence: tracked("physique.gluteProminence", bodyChoices.gluteProminence, bodyVisible),
+      proportionalBalance: tracked("physique.proportionalBalance", bodyChoices.proportionalBalance, bodyVisible),
+      posture: tracked("physique.posture", bodyChoices.posture, bodyVisible),
     },
     style: {
-      clothingPresentation: tracked("style.clothingPresentation", pick("clothingPresentation"), bodyVisible),
+      clothingPresentation: tracked("style.clothingPresentation", bodyChoices.clothingPresentation, bodyVisible),
       grooming: tracked("style.grooming", pick("grooming"), faceVisible),
-      visualCoordination: tracked("style.visualCoordination", pick("visualCoordination"), bodyVisible),
+      visualCoordination: tracked("style.visualCoordination", bodyChoices.visualCoordination, bodyVisible),
     },
     evidence: {
       faceCoverage: coverage(faceVisibility.value),

@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LOCAL_MODEL, MARKET_CONFIG, UPLOAD_LIMITS, VISUAL_RUBRIC, type VisualCategory, type VisualObservation } from "../lib/config";
-import { herdEconomics, scoreObservation } from "../lib/scoring";
+import { herdEconomics, nonlinearFit, scoreObservation } from "../lib/scoring";
 
 type Stage = "landing" | "consent" | "upload" | "analyzing" | "reveal" | "result";
 type Motion = "full" | "reduced" | "off";
@@ -15,6 +15,11 @@ const money = (value: number, currency: "USD" | "SAR") => new Intl.NumberFormat(
 const describeTrait = (value: string) => value === "not_visible" || value === "unknown"
   ? "Not visible"
   : value.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+const describeMatch = (value: string, preferred: string) => {
+  if (value === "not_visible" || value === "unknown") return "Not visible";
+  const fit = nonlinearFit(value, preferred);
+  return fit >= 0.9 ? "Strong preference match" : fit >= 0.6 ? "Partial preference match" : "Different from configured preference";
+};
 
 function Camel({ className = "", gold = false }: { className?: string; gold?: boolean }) {
   return <span className={`camel ${gold ? "gold" : ""} ${className}`} aria-hidden="true"><i className="camel-neck" /><i className="camel-head" /><i className="camel-ear" /><i className="camel-body" /><i className="hump one" /><i className="hump two" /><i className="leg a" /><i className="leg b" /><i className="leg c" /><i className="leg d" /><i className="tail" /></span>;
@@ -254,18 +259,21 @@ export default function CamelCalculator() {
     {stage === "result" && result && observation && economics && <section className="result"><div className="result-hero"><span className="eyebrow">VISIBLE-APPEARANCE ENTERTAINMENT RESULT</span><p>{name || "This mysterious traveler"} scored</p><div className="big-number">{result.camels}</div><h1>fictional working camels</h1><h2>{result.tier.title}</h2><p className="result-message">People are not property. This is a subjective visual joke, not a real valuation.</p><Camel className="result-camel" gold={result.camels >= 180} /></div>
       <div className="split-ledgers">
         <article><span className="card-label">FACE-ONLY LEDGER</span>{result.faceCamels == null ? <><strong className="unseen">Not visible</strong><p>No face penalty. The final herd was reweighted to the visible categories.</p></> : <><strong>{result.faceCamels}<small> camels</small></strong><p>A separate estimate from the visible face—not a share of the final herd.</p></>}{[
-          ["Facial symmetry", observation.face.apparentSymmetry.value],
-          ["Feature balance", observation.face.featureBalance.value],
-          ["Expression", observation.face.expression.value],
-          ["Eye presentation", observation.face.eyeAppearance.value],
-          ["Hair", observation.hair.presentation.value],
-        ].map(([label, value]) => <div key={label}><span>{label}</span><b>{describeTrait(value)}</b></div>)}</article>
+          ["Facial symmetry", observation.face.apparentSymmetry.value, VISUAL_RUBRIC.preferences.apparentSymmetry],
+          ["Feature balance", observation.face.featureBalance.value, VISUAL_RUBRIC.preferences.featureBalance],
+          ["Expression", observation.face.expression.value, VISUAL_RUBRIC.preferences.expression],
+          ["Eye presentation", observation.face.eyeAppearance.value, VISUAL_RUBRIC.preferences.eyeAppearance],
+          ["Hair presentation", observation.hair.presentation.value, "prominent"],
+        ].map(([label, value, preferred]) => <div key={label}><span>{label}<small>{describeTrait(value)}</small></span><b>{describeMatch(value, preferred)}</b></div>)}</article>
         <article><span className="card-label">BODY-ONLY LEDGER</span>{result.bodyCamels == null ? <><strong className="unseen">Not visible</strong><p>No body penalty. The final herd was reweighted to the visible categories.</p></> : <><strong>{result.bodyCamels}<small> camels</small></strong><p>A separate estimate from visible proportions—not a share of the final herd.</p></>}{[
-          ["Build", observation.physique.build.value],
-          ["Waist definition", observation.physique.waistDefinition.value],
-          ["Proportional balance", observation.physique.proportionalBalance.value],
-          ["Posture", observation.physique.posture.value],
-        ].map(([label, value]) => <div key={label}><span>{label}</span><b>{describeTrait(value)}</b></div>)}</article>
+          ["Build", observation.physique.build.value, VISUAL_RUBRIC.preferences.build],
+          ["Waist definition", observation.physique.waistDefinition.value, VISUAL_RUBRIC.preferences.waistDefinition],
+          ["Chest prominence", observation.physique.chestProminence.value, VISUAL_RUBRIC.preferences.chestProminence],
+          ["Hip prominence", observation.physique.hipProminence.value, VISUAL_RUBRIC.preferences.hipProminence],
+          ["Glute prominence", observation.physique.gluteProminence.value, VISUAL_RUBRIC.preferences.gluteProminence],
+          ["Proportional balance", observation.physique.proportionalBalance.value, VISUAL_RUBRIC.preferences.proportionalBalance],
+          ["Posture", observation.physique.posture.value, VISUAL_RUBRIC.preferences.posture],
+        ].map(([label, value, preferred]) => <div key={label}><span>{label}<small>{describeTrait(value)}</small></span><b>{describeMatch(value, preferred)}</b></div>)}</article>
       </div>
       <div className="result-grid"><article className="score-card"><span className="card-label">COMBINED VISIBLE TRAIT BREAKDOWN</span><h3>How the final herd was built</h3>{(Object.keys(labels) as VisualCategory[]).map((key) => <div className="bar" key={key}><div><span>{labels[key]}</span><strong>{result.categoryScores[key] == null ? "Not visible" : Math.round(result.categoryScores[key]!)}</strong></div><i><b style={{ width: `${result.categoryScores[key] ?? 0}%` }} /></i></div>)}<div className="confidence"><strong>Analysis confidence</strong><span>{Math.round(result.confidence * 100)}% · {result.confidence >= .8 ? "High" : "Moderate"}</span></div>{result.missingTraits.length > 0 && <p className="missing"><strong>Could not assess:</strong> {result.missingTraits.join(", ")}</p>}<details><summary>Why this result?</summary><p>The face and body estimates are independent full-profile comparisons. The final herd combines every visible category using the configured weights. Missing categories are removed and the remaining weights are redistributed. A confidence-aware calibration pulls uncertain extremes toward the middle, reducing wildly high or low results. The vision layer never chooses a camel count; deterministic scoring does.</p></details></article>
       <article className="economics"><span className="card-label">IMAGINARY HERD ECONOMICS</span><h3>Ordinary working dromedaries</h3>{[["Low", economics.low, economics.lowSar],["Reference", economics.reference, economics.referenceSar],["High", economics.high, economics.highSar]].map(([l,u,s]) => <div className="money-row" key={String(l)}><span>{l} estimate</span><strong>{money(Number(u),"USD")}<small>{money(Number(s),"SAR")}</small></strong></div>)}<p className="market-note">{MARKET_CONFIG.market} · {MARKET_CONFIG.assumptionVersion}. Illustrative only. Racing, breeding, festival, and prize-winning camels may fall far outside this ordinary working-camel range.</p></article></div>

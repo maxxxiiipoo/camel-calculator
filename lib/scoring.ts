@@ -1,7 +1,7 @@
 import { MARKET_CONFIG, VISUAL_RUBRIC, type Level, type TraitObservation, type VisualCategory, type VisualObservation } from "./config.ts";
 
 const levels: Level[] = ["low", "moderate", "prominent", "very_prominent"];
-const known = (trait: TraitObservation) => trait.value !== "not_visible" && trait.value !== "unknown" && trait.confidence >= 0.45;
+const known = (trait: TraitObservation) => trait.value !== "not_visible" && trait.value !== "unknown" && trait.confidence >= 0.27;
 
 export function nonlinearFit(value: string, preferred: string) {
   const a = levels.indexOf(value as Level);
