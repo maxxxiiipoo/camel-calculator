@@ -6,10 +6,12 @@ import { isVisualObservation } from "../lib/config.ts";
 const source = await readFile(new URL("../app/CamelCalculator.tsx", import.meta.url), "utf8");
 const worker = await readFile(new URL("../app/local-observer.worker.ts", import.meta.url), "utf8");
 const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
-test("official Vercel Analytics is mounted without photo instrumentation", () => {
-  assert.match(layout, /@vercel\/analytics\/next/);
-  assert.match(layout, /<Analytics \/>/);
-  assert.doesNotMatch(source, /track\(/);
+test("Vercel Analytics requires explicit consent and excludes private inputs", () => {
+  assert.doesNotMatch(layout, /@vercel\/analytics/);
+  assert.match(source, /analyticsConsent && <Analytics \/>/);
+  assert.match(source, /I agree to anonymous usage and result-band analytics/);
+  assert.match(source, /track\("camel_result"/);
+  assert.doesNotMatch(source.slice(source.indexOf('track("camel_result"'), source.indexOf("}, [analyticsConsent")), /name|dataUrl|observation/);
 });
 test("adult consent and photo rights gate upload", () => {
   assert.match(source, /disabled=\{!consents\.every\(Boolean\)\}/);

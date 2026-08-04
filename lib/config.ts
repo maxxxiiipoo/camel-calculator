@@ -53,7 +53,7 @@ export type VisualObservation = {
 };
 
 export const VISUAL_RUBRIC = {
-  version: "visual-rubric-1.1-editorial-visible-traits",
+  version: "visual-rubric-1.2-consented-calibration",
   // Adapted from the non-sensitive, photograph-visible themes in the referenced
   // attraction article. Voice, smell, health, fertility, genes, and exact body
   // measurements are deliberately excluded. Hair color is observed for the
@@ -61,9 +61,9 @@ export const VISUAL_RUBRIC = {
   categoryWeights: { face: 45, body: 30, hair: 10, style: 10, coherence: 5 },
   faceTraitWeights: {
     apparentSymmetry: 30,
-    featureBalance: 30,
-    expression: 22,
-    eyeAppearance: 18,
+    featureBalance: 40,
+    expression: 15,
+    eyeAppearance: 15,
   },
   bodyTraitWeights: {
     proportionalBalance: 30,

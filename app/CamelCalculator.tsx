@@ -2,6 +2,8 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Analytics } from "@vercel/analytics/next";
+import { track } from "@vercel/analytics";
 import { LOCAL_MODEL, MARKET_CONFIG, UPLOAD_LIMITS, VISUAL_RUBRIC, type VisualCategory, type VisualObservation } from "../lib/config";
 import { herdEconomics, nonlinearFit, scoreObservation } from "../lib/scoring";
 
@@ -67,7 +69,7 @@ export default function CamelCalculator() {
   const [motion, setMotion] = useState<Motion>(() =>
     typeof window !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "full",
   );
-  const [consents, setConsents] = useState([false, false, false, false, false]);
+  const [consents, setConsents] = useState([false, false, false, false, false, false]);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [name, setName] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -85,11 +87,28 @@ export default function CamelCalculator() {
   const backendRef = useRef<"webgpu" | "wasm">("wasm");
   const preparedRef = useRef<string[]>([]);
   const progressRef = useRef(new Map<string, { loaded: number; total: number }>());
+  const trackedResultRef = useRef<string | null>(null);
   const result = useMemo(() => observation ? scoreObservation(observation) : null, [observation]);
   const economics = result ? herdEconomics(result.camels) : null;
+  const analyticsConsent = consents[5];
 
   useEffect(() => { document.documentElement.dataset.motion = motion; }, [motion]);
   useEffect(() => () => workerRef.current?.terminate(), []);
+  useEffect(() => {
+    if (!analyticsConsent || !result || stage !== "result") return;
+    const resultKey = `${result.camels}:${result.tier.title}:${photos.length}`;
+    if (trackedResultRef.current === resultKey) return;
+    trackedResultRef.current = resultKey;
+    const band = (value: number | null) => value == null ? "not_visible" : `${Math.floor(value / 10) * 10}-${Math.floor(value / 10) * 10 + 9}`;
+    track("camel_result", {
+      camel_band: `${Math.floor(result.camels / 10) * 10}-${Math.floor(result.camels / 10) * 10 + 9}`,
+      tier: result.tier.title,
+      face_score_band: band(result.categoryScores.face),
+      body_score_band: band(result.categoryScores.body),
+      photo_count: photos.length,
+      observer_backend: metrics?.backend ?? backend,
+    });
+  }, [analyticsConsent, backend, metrics?.backend, photos.length, result, stage]);
   useEffect(() => {
     if (stage === "upload" && "caches" in window) {
       caches.has("transformers-cache").then(setModelCached);
@@ -177,7 +196,7 @@ export default function CamelCalculator() {
   }
   function restart() {
     preparedRef.current = [];
-    setPhotos([]); setObservation(null); setError(""); setName(""); setConsents([false, false, false, false, false]); setStage("landing");
+    setPhotos([]); setObservation(null); setError(""); setName(""); setConsents([false, false, false, false, false, false]); trackedResultRef.current = null; setStage("landing");
   }
 
   async function analyze() {
@@ -224,6 +243,7 @@ export default function CamelCalculator() {
   }
 
   return <main>
+    {analyticsConsent && <Analytics />}
     <div className="settings"><select aria-label="Motion preference" value={motion} onChange={(e) => setMotion(e.target.value as Motion)}><option value="full">Full motion</option><option value="reduced">Reduced motion</option><option value="off">Motion off</option></select></div>
     {(stage === "landing" || stage === "consent") && <DesertScene />}
     {stage === "landing" && <section className="hero"><span className="eyebrow">THE INTERNET’S LEAST NECESSARY VISUAL ANALYSIS</span><h1>Camel<br /><em>Calculator</em></h1><p className="lead">Upload one to three appropriate photos. The caravan observes visible traits. Your private rubric counts the fictional camels.</p><button className="primary stampede" onClick={() => setStage("consent")}>Upload & Calculate <span>→</span></button><p className="micro">Adults only · no face recognition · no permanent photo storage · zero science</p></section>}
@@ -235,6 +255,7 @@ export default function CamelCalculator() {
         "The image is not intimate, explicit, private, or deceptive.",
         "The result is fictional entertainment.",
         "I understand that a person’s real worth cannot be calculated.",
+        "I agree to anonymous usage and result-band analytics. Page activity, photo count, broad score bands, and the fictional result tier may be recorded to improve Camel Calculator. Photos, filenames, nickname, and raw visual observations are never included.",
       ].map((copy, i) => <label className="check" key={copy}><input type="checkbox" checked={consents[i]} onChange={(e) => setConsents((c) => c.map((v, x) => x === i ? e.target.checked : v))} /><span><strong>{copy}</strong></span></label>)}
       <button className="primary" disabled={!consents.every(Boolean)} onClick={() => setStage("upload")}>Choose photographs →</button>
     </section>}
