@@ -6,6 +6,7 @@ import { isVisualObservation } from "../lib/config.ts";
 const source = await readFile(new URL("../app/CamelCalculator.tsx", import.meta.url), "utf8");
 const worker = await readFile(new URL("../app/local-observer.worker.ts", import.meta.url), "utf8");
 const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
+const leaderboardRoute = await readFile(new URL("../app/api/leaderboard/route.ts", import.meta.url), "utf8");
 test("Vercel Analytics requires explicit consent and excludes private inputs", () => {
   assert.doesNotMatch(layout, /@vercel\/analytics/);
   assert.match(source, /analyticsConsent && <Analytics \/>/);
@@ -20,9 +21,20 @@ test("adult consent and photo rights gate upload", () => {
   assert.doesNotMatch(worker, /strongMinorEvidence/);
   assert.match(worker, /apparent-age label never blocks a result/);
 });
-test("default share card omits photographs and is local", () => {
-  assert.match(source, /PHOTO NOT INCLUDED/);
-  assert.doesNotMatch(source.slice(source.indexOf("function downloadCard"), source.indexOf("return <main>")), /drawImage/);
+test("photo share card is generated locally and never submitted", () => {
+  assert.match(source, /function createCardBlob/);
+  assert.match(source, /photos\[0\]\.dataUrl/);
+  assert.match(source, /navigator\.share/);
+  assert.doesNotMatch(source.slice(source.indexOf("async function createShareableCard"), source.indexOf("function downloadShareCard")), /fetch\(/);
+});
+test("leaderboard photo storage is explicit opt-in and minimal", () => {
+  assert.match(source, /Your photo is not permanently saved unless you choose to join the public leaderboard\./);
+  assert.match(source, /I agree to have my photo, camel count, and ranking saved and publicly displayed/);
+  assert.match(source, /disabled=\{!leaderboardConsent \|\| leaderboardBusy\}/);
+  assert.match(source, /canvas\.width = 480; canvas\.height = 600/);
+  assert.match(leaderboardRoute, /consent = form\.get\("consent"\) === "true"/);
+  assert.match(leaderboardRoute, /ORDER BY sortable_score DESC/);
+  assert.match(leaderboardRoute, /LIMIT 100/);
 });
 test("restart and delete clear all local image state", () => {
   assert.match(source, /preparedRef\.current = \[\]/);

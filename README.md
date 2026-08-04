@@ -13,7 +13,7 @@ npm install
 npm run dev
 ```
 
-No API key, token, account, secret environment variable, paid service, server inference, or database is required.
+No API key, paid vision service, or server inference is required. Hosted leaderboard deployments use platform-managed D1 and R2 bindings; local image analysis and card generation continue to work without them.
 
 ## Local observer
 
@@ -40,26 +40,29 @@ Limitations: CLIP can miss subtle, obstructed, or out-of-distribution details an
 - `lib/reconcile.ts`: multi-photo evidence reconciliation
 - `lib/scoring.ts`: pure deterministic camel scoring; the model never awards camels
 - `lib/image.ts`: upload magic-byte validation
+- `app/api/leaderboard`: consent-checked leaderboard metadata and processed-photo routes
+- `db/schema.ts`: minimal public leaderboard metadata stored in D1
 - `public/vendor/wasm`: same-origin ONNX Runtime files so the fallback does not fetch runtime code from a third-party CDN
 
-There is no analysis API route.
+There is no analysis API route. D1 stores leaderboard metadata and R2 stores only opted-in, downsized leaderboard JPEGs.
 
 ## Privacy
 
 - Images are decoded, oriented by the browser image decoder, re-encoded through canvas, cropped, and resized before inference.
 - Original filenames and EXIF are discarded.
 - Prepared image data is transferred only to an in-origin Web Worker.
-- No image is sent to Vercel functions, inference APIs, analytics, storage, URLs, or databases.
+- Normal analysis never uploads an image. An image leaves the device only after the user separately checks the public-leaderboard consent box and submits.
+- Leaderboard submission stores a 480×600 re-encoded JPEG, display name, camel count, sortable score, consent timestamp, and submission time. The original upload is never stored.
 - The only cross-origin inference traffic is the first model download from its public Hugging Face repository.
 - Model/runtime files are cached for repeat and offline visits, subject to browser eviction policy.
 - “Delete my photos” clears image and prepared-buffer state; “Remove downloaded model” clears the model cache where supported.
-- The default result card is generated locally and excludes photos.
+- Share cards include the selected photo but are generated locally and never create a leaderboard entry.
 
 ## Scoring
 
-The visual index remains Face 35%, Body proportions 40%, Hair 10%, Style 10%, and Visual coherence 5%. Unknown traits are removed and weights are redistributed among visible traits in the category. Image quality affects confidence only.
+The visual index is Face 45%, Body proportions 30%, Hair 10%, Style 10%, and Visual coherence 5%. Unknown traits are removed and weights are redistributed among visible traits in the category. Image quality affects confidence only.
 
-Ordinal traits use nonlinear proximity curves. A capped harmony bonus rewards combined alignment. The deterministic 0–100 result maps to 12–220 fictional working camels.
+Ordinal traits use nonlinear proximity curves. A capped harmony bonus rewards combined alignment. The deterministic 0–100 result maps through a deflationary nonlinear curve to 12–220 fictional working camels, reserving large herds for high scores.
 
 Market assumptions remain USD 2,000 / 6,000 / 10,000 per ordinary working camel, 1 USD = 3.75 SAR, with Saudi Arabia context.
 
@@ -74,7 +77,7 @@ npm run build
 npx next build --webpack
 ```
 
-Tests cover upload signatures, unsupported files, nonlinear scoring, unknown redistribution, low confidence, multi-photo reconciliation, determinism, score bounds, economics, consent, default share privacy, deletion, reduced motion, output validation, local retry, progress, cancellation, cache removal, and the absence of server inference.
+Tests cover upload signatures, unsupported files, nonlinear scoring, unknown redistribution, low confidence, multi-photo reconciliation, determinism, score bounds, economics, consent, local share-card privacy, leaderboard opt-in and processing limits, deletion, reduced motion, output validation, local retry, progress, cancellation, cache removal, and the absence of server inference.
 
 ## Performance instrumentation
 
