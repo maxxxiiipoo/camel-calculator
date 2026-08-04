@@ -9,7 +9,8 @@ test("adult consent and photo rights gate upload", () => {
   assert.match(source, /disabled=\{!consents\.every\(Boolean\)\}/);
   assert.match(source, /Only upload photos of adults who are in on the joke\./);
   assert.match(worker, /The user's explicit 18\+ attestation is the primary age confirmation/);
-  assert.match(worker, /strongMinorEvidence/);
+  assert.doesNotMatch(worker, /strongMinorEvidence/);
+  assert.match(worker, /apparent-age label never blocks a result/);
 });
 test("default share card omits photographs and is local", () => {
   assert.match(source, /PHOTO NOT INCLUDED/);
