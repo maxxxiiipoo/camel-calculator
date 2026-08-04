@@ -15,11 +15,15 @@ function weightedVisibleScore(entries: { trait: TraitObservation; preferred: str
   const visible = entries.filter((entry) => known(entry.trait));
   const totalWeight = visible.reduce((sum, entry) => sum + entry.weight, 0);
   if (!totalWeight) return null;
-  return visible.reduce((sum, entry) => sum + nonlinearFit(entry.trait.value, entry.preferred) * (entry.weight / totalWeight), 0) * 100;
+  return visible.reduce((sum, entry) => {
+    const preferenceFit = nonlinearFit(entry.trait.value, entry.preferred);
+    const evidenceStrength = 0.6 + Math.max(0, Math.min(1, entry.trait.confidence)) * 0.4;
+    return sum + preferenceFit * evidenceStrength * (entry.weight / totalWeight);
+  }, 0) * 100;
 }
 
 function calibratedScore(score: number, confidence: number) {
-  const confidenceFactor = 0.62 + Math.max(0, Math.min(1, confidence)) * 0.25;
+  const confidenceFactor = 0.95 + Math.max(0, Math.min(1, confidence)) * 0.2;
   return Math.max(0, Math.min(100, 50 + (score - 50) * confidenceFactor));
 }
 

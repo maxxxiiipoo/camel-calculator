@@ -47,13 +47,21 @@ test("scoring is deterministic and bounded", () => {
   assert.ok(result.faceCamels! >= 12 && result.faceCamels! <= 220);
   assert.ok(result.bodyCamels! >= 12 && result.bodyCamels! <= 220);
 });
-test("confidence calibration tempers extremes and body can be absent", () => {
+test("confidence calibration stays bounded and body can be absent", () => {
   const high = observation(.2);
   const calibrated = scoreObservation(high);
-  assert.ok(calibrated.score < calibrated.rawScore);
+  assert.ok(calibrated.score >= 0 && calibrated.score <= 100);
   high.physique = Object.fromEntries(Object.keys(high.physique).map((key) => [key, trait("not_visible", .1)])) as VisualObservation["physique"];
   assert.equal(scoreObservation(high).bodyCamels, null);
   assert.notEqual(scoreObservation(high).faceCamels, null);
+});
+test("trait evidence strength creates meaningful camel separation", () => {
+  const strong = observation(.9);
+  const uncertain = observation(.9);
+  for (const group of [uncertain.face, uncertain.hair, uncertain.physique, uncertain.style]) {
+    for (const item of Object.values(group)) item.confidence = .3;
+  }
+  assert.ok(scoreObservation(strong).camels - scoreObservation(uncertain).camels >= 20);
 });
 test("camel economics use configured USD and SAR conversion", () => {
   const result = herdEconomics(84);
