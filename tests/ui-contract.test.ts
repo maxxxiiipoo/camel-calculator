@@ -5,6 +5,12 @@ import { isVisualObservation } from "../lib/config.ts";
 
 const source = await readFile(new URL("../app/CamelCalculator.tsx", import.meta.url), "utf8");
 const worker = await readFile(new URL("../app/local-observer.worker.ts", import.meta.url), "utf8");
+const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
+test("official Vercel Analytics is mounted without photo instrumentation", () => {
+  assert.match(layout, /@vercel\/analytics\/next/);
+  assert.match(layout, /<Analytics \/>/);
+  assert.doesNotMatch(source, /track\(/);
+});
 test("adult consent and photo rights gate upload", () => {
   assert.match(source, /disabled=\{!consents\.every\(Boolean\)\}/);
   assert.match(source, /Only upload photos of adults who are in on the joke\./);
