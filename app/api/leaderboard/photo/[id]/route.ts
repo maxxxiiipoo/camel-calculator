@@ -1,12 +1,10 @@
+import { env } from "cloudflare:workers";
+
 export const runtime = "edge";
 
 type Bindings = { DB: D1Database; LEADERBOARD_PHOTOS: R2Bucket };
 
-async function bindings() {
-  const cloudflareModule = "cloudflare:workers";
-  const runtime = await import(/* webpackIgnore: true */ cloudflareModule) as { env: Record<string, unknown> };
-  return runtime.env as unknown as Bindings;
-}
+const bindings = () => env as unknown as Bindings;
 
 export async function GET(_: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;

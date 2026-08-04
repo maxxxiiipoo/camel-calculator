@@ -1,3 +1,5 @@
+import { env } from "cloudflare:workers";
+
 export const runtime = "edge";
 
 type Bindings = {
@@ -5,11 +7,7 @@ type Bindings = {
   LEADERBOARD_PHOTOS: R2Bucket;
 };
 
-async function bindings() {
-  const cloudflareModule = "cloudflare:workers";
-  const runtime = await import(/* webpackIgnore: true */ cloudflareModule) as { env: Record<string, unknown> };
-  return runtime.env as unknown as Bindings;
-}
+const bindings = () => env as unknown as Bindings;
 
 const allowedOrigin = (origin: string) =>
   origin === "https://camel-calculator.mghockey61858841.chatgpt.site" ||
