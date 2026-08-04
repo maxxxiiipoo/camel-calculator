@@ -63,6 +63,13 @@ test("trait evidence strength creates meaningful camel separation", () => {
   }
   assert.ok(scoreObservation(strong).camels - scoreObservation(uncertain).camels >= 20);
 });
+test("hair color is descriptive only and cannot change the camel score", () => {
+  const blonde = observation();
+  const brunette = observation();
+  brunette.hair.color = trait("brown");
+  assert.equal(scoreObservation(blonde).camels, scoreObservation(brunette).camels);
+  assert.equal(scoreObservation(blonde).categoryScores.hair, scoreObservation(brunette).categoryScores.hair);
+});
 test("camel economics use configured USD and SAR conversion", () => {
   const result = herdEconomics(84);
   assert.equal(result.low, 168000); assert.equal(result.reference, 504000);

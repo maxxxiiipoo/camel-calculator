@@ -38,10 +38,10 @@ export function scoreObservation(observation: VisualObservation) {
   const p = VISUAL_RUBRIC.preferences;
   const categoryScores: Record<VisualCategory, number | null> = {
     face: weightedVisibleScore([
-      { trait: observation.face.apparentSymmetry, preferred: p.apparentSymmetry, weight: 30 },
-      { trait: observation.face.featureBalance, preferred: p.featureBalance, weight: 30 },
-      { trait: observation.face.expression, preferred: p.expression, weight: 20 },
-      { trait: observation.face.eyeAppearance, preferred: p.eyeAppearance, weight: 20 },
+      { trait: observation.face.apparentSymmetry, preferred: p.apparentSymmetry, weight: VISUAL_RUBRIC.faceTraitWeights.apparentSymmetry },
+      { trait: observation.face.featureBalance, preferred: p.featureBalance, weight: VISUAL_RUBRIC.faceTraitWeights.featureBalance },
+      { trait: observation.face.expression, preferred: p.expression, weight: VISUAL_RUBRIC.faceTraitWeights.expression },
+      { trait: observation.face.eyeAppearance, preferred: p.eyeAppearance, weight: VISUAL_RUBRIC.faceTraitWeights.eyeAppearance },
     ]),
     body: weightedVisibleScore(Object.entries(VISUAL_RUBRIC.bodyTraitWeights).map(([key, weight]) => ({
       trait: observation.physique[key as keyof typeof observation.physique],
@@ -49,10 +49,9 @@ export function scoreObservation(observation: VisualObservation) {
       weight,
     }))),
     hair: weightedVisibleScore([
-      { trait: observation.hair.color, preferred: p.hairColors[0], weight: 35 },
       { trait: observation.hair.length, preferred: p.hairLengths[0], weight: 20 },
-      { trait: observation.hair.style, preferred: p.hairStyles[0], weight: 25 },
-      { trait: observation.hair.presentation, preferred: "prominent", weight: 20 },
+      { trait: observation.hair.style, preferred: p.hairStyles[0], weight: 30 },
+      { trait: observation.hair.presentation, preferred: "prominent", weight: 50 },
     ]),
     style: weightedVisibleScore([
       { trait: observation.style.clothingPresentation, preferred: p.clothingPresentation, weight: 40 },

@@ -53,8 +53,18 @@ export type VisualObservation = {
 };
 
 export const VISUAL_RUBRIC = {
-  version: "visual-rubric-1.0",
-  categoryWeights: { face: 35, body: 40, hair: 10, style: 10, coherence: 5 },
+  version: "visual-rubric-1.1-editorial-visible-traits",
+  // Adapted from the non-sensitive, photograph-visible themes in the referenced
+  // attraction article. Voice, smell, health, fertility, genes, and exact body
+  // measurements are deliberately excluded. Hair color is observed for the
+  // explanation only and has no effect on the score.
+  categoryWeights: { face: 45, body: 30, hair: 10, style: 10, coherence: 5 },
+  faceTraitWeights: {
+    apparentSymmetry: 30,
+    featureBalance: 30,
+    expression: 22,
+    eyeAppearance: 18,
+  },
   bodyTraitWeights: {
     proportionalBalance: 30,
     waistDefinition: 20,
@@ -69,7 +79,7 @@ export const VISUAL_RUBRIC = {
     featureBalance: "prominent",
     expression: "prominent",
     eyeAppearance: "prominent",
-    hairColors: ["blonde", "light_brown"],
+    hairColors: [],
     hairLengths: ["long", "very_long"],
     hairStyles: ["wavy", "styled"],
     build: "moderate",
