@@ -18,6 +18,18 @@ function weightedVisibleScore(entries: { trait: TraitObservation; preferred: str
   return visible.reduce((sum, entry) => sum + nonlinearFit(entry.trait.value, entry.preferred) * (entry.weight / totalWeight), 0) * 100;
 }
 
+function calibratedScore(score: number, confidence: number) {
+  const confidenceFactor = 0.62 + Math.max(0, Math.min(1, confidence)) * 0.25;
+  return Math.max(0, Math.min(100, 50 + (score - 50) * confidenceFactor));
+}
+
+function camelsFromScore(score: number) {
+  return Math.max(
+    VISUAL_RUBRIC.minimumCamelResult,
+    Math.min(VISUAL_RUBRIC.maximumCamelResult, Math.round(12 + score * 2.08)),
+  );
+}
+
 export function scoreObservation(observation: VisualObservation) {
   const p = VISUAL_RUBRIC.preferences;
   const categoryScores: Record<VisualCategory, number | null> = {
@@ -50,16 +62,25 @@ export function scoreObservation(observation: VisualObservation) {
   };
   const visibleCategories = (Object.keys(categoryScores) as VisualCategory[]).filter((key) => categoryScores[key] !== null);
   const categoryWeightTotal = visibleCategories.reduce((sum, key) => sum + VISUAL_RUBRIC.categoryWeights[key], 0);
-  let score = visibleCategories.reduce((sum, key) => sum + categoryScores[key]! * (VISUAL_RUBRIC.categoryWeights[key] / categoryWeightTotal), 0);
+  const rawScore = visibleCategories.reduce((sum, key) => sum + categoryScores[key]! * (VISUAL_RUBRIC.categoryWeights[key] / categoryWeightTotal), 0);
   const harmonyTraits = ["waistDefinition", "hipProminence", "gluteProminence", "chestProminence", "proportionalBalance"] as const;
   const fits = harmonyTraits
     .filter((key) => known(observation.physique[key]))
     .map((key) => nonlinearFit(observation.physique[key].value, p[key]));
   const harmonyBonus = fits.length >= 3 ? Math.min(VISUAL_RUBRIC.proportionHarmonyBonusCap, (fits.reduce((a, b) => a + b, 0) / fits.length) * 5) : 0;
-  score = Math.min(VISUAL_RUBRIC.overallScoreCap, score + harmonyBonus);
-  const camels = Math.max(VISUAL_RUBRIC.minimumCamelResult, Math.min(VISUAL_RUBRIC.maximumCamelResult, Math.round(12 + score * 2.08)));
+  const score = Math.min(
+    VISUAL_RUBRIC.overallScoreCap,
+    calibratedScore(rawScore, observation.evidence.overallConfidence) + harmonyBonus * 0.6,
+  );
+  const camels = camelsFromScore(score);
+  const faceCamels = categoryScores.face == null
+    ? null
+    : camelsFromScore(calibratedScore(categoryScores.face, observation.face.visibility.confidence));
+  const bodyCamels = categoryScores.body == null
+    ? null
+    : camelsFromScore(calibratedScore(categoryScores.body, observation.physique.visibility.confidence));
   const tier = VISUAL_RUBRIC.tiers.find((item) => camels >= item.min && camels <= item.max)!;
-  return { score, camels, tier, categoryScores, harmonyBonus, confidence: observation.evidence.overallConfidence, missingTraits: observation.evidence.missingTraits };
+  return { score, rawScore, camels, faceCamels, bodyCamels, tier, categoryScores, harmonyBonus, confidence: observation.evidence.overallConfidence, missingTraits: observation.evidence.missingTraits };
 }
 
 export function herdEconomics(camels: number) {

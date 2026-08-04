@@ -44,6 +44,16 @@ test("scoring is deterministic and bounded", () => {
   assert.deepEqual(scoreObservation(observation()), scoreObservation(observation()));
   const result = scoreObservation(observation());
   assert.ok(result.camels >= 12 && result.camels <= 220);
+  assert.ok(result.faceCamels! >= 12 && result.faceCamels! <= 220);
+  assert.ok(result.bodyCamels! >= 12 && result.bodyCamels! <= 220);
+});
+test("confidence calibration tempers extremes and body can be absent", () => {
+  const high = observation(.2);
+  const calibrated = scoreObservation(high);
+  assert.ok(calibrated.score < calibrated.rawScore);
+  high.physique = Object.fromEntries(Object.keys(high.physique).map((key) => [key, trait("not_visible", .1)])) as VisualObservation["physique"];
+  assert.equal(scoreObservation(high).bodyCamels, null);
+  assert.notEqual(scoreObservation(high).faceCamels, null);
 });
 test("camel economics use configured USD and SAR conversion", () => {
   const result = herdEconomics(84);
