@@ -55,6 +55,14 @@ test("confidence calibration stays bounded and body can be absent", () => {
   assert.equal(scoreObservation(high).bodyCamels, null);
   assert.notEqual(scoreObservation(high).faceCamels, null);
 });
+test("face-only framing cannot receive a body score from hallucinated body traits", () => {
+  const portrait = observation();
+  portrait.evidence.bodyCoverage = 0.2;
+  portrait.physique.visibility = trait("low", .9);
+  assert.equal(scoreObservation(portrait).categoryScores.body, null);
+  assert.equal(scoreObservation(portrait).bodyCamels, null);
+  assert.notEqual(scoreObservation(portrait).faceCamels, null);
+});
 test("trait evidence strength creates meaningful camel separation", () => {
   const strong = observation(.9);
   const uncertain = observation(.9);

@@ -93,7 +93,7 @@ export const VISUAL_RUBRIC = {
     grooming: "prominent",
     visualCoordination: "prominent",
   },
-  curves: { exact: 1, adjacent: 0.78, twoAway: 0.42, threeAway: 0.16 },
+  curves: { exact: 1, adjacent: 0.68, twoAway: 0.18, threeAway: 0.04 },
   minimumCamelResult: 12,
   maximumCamelResult: 220,
   minimumAdultConfidence: 0.75,

@@ -53,15 +53,15 @@ const candidates: Candidate[] = [
   { group: "eyeVisibility", value: "low", label: "the eyes are obscured" },
   { group: "eyeVisibility", value: "moderate", label: "the eyes are partly visible" },
   { group: "eyeVisibility", value: "prominent", label: "the eyes are clearly visible" },
-  { group: "eyeAppearance", value: "low", label: "subtle eye presentation" },
-  { group: "eyeAppearance", value: "moderate", label: "balanced eye presentation" },
-  { group: "eyeAppearance", value: "prominent", label: "defined eye presentation" },
-  { group: "symmetry", value: "low", label: "low apparent facial symmetry in this view" },
-  { group: "symmetry", value: "moderate", label: "moderate apparent facial symmetry in this view" },
-  { group: "symmetry", value: "prominent", label: "strong apparent facial symmetry in this view" },
-  { group: "featureBalance", value: "low", label: "low visible facial feature balance in this view" },
-  { group: "featureBalance", value: "moderate", label: "moderate visible facial feature balance in this view" },
-  { group: "featureBalance", value: "prominent", label: "strong visible facial feature balance in this view" },
+  { group: "eyeAppearance", value: "low", label: "an ordinary face with visually subdued eyes" },
+  { group: "eyeAppearance", value: "moderate", label: "an appealing face with balanced expressive eyes" },
+  { group: "eyeAppearance", value: "prominent", label: "a highly attractive face with striking expressive eyes" },
+  { group: "symmetry", value: "low", label: "a face with visibly weak aesthetic symmetry" },
+  { group: "symmetry", value: "moderate", label: "a face with average natural symmetry" },
+  { group: "symmetry", value: "prominent", label: "a highly attractive face with strong natural symmetry" },
+  { group: "featureBalance", value: "low", label: "a face with weak overall aesthetic harmony" },
+  { group: "featureBalance", value: "moderate", label: "a pleasant face with balanced average facial harmony" },
+  { group: "featureBalance", value: "prominent", label: "an exceptionally attractive face with harmonious balanced features" },
   ...["black", "brown", "light_brown", "blonde", "red", "gray", "other"].map((value) => ({
     group: "hairColor", value, label: `${value.replace("_", " ")} hair`,
   })),
@@ -139,7 +139,7 @@ function buildObservation(results: RankedLabel[]): VisualObservation {
   const adult = pick("adult", true);
   const safety = pick("safety", true);
   let faceVisibility = pick("faceVisibility", true);
-  let bodyVisibility = pick("bodyVisibility", true);
+  const bodyVisibility = pick("bodyVisibility", true);
   const faceChoices = {
     symmetry: pick("symmetry"),
     featureBalance: pick("featureBalance"),
@@ -165,12 +165,12 @@ function buildObservation(results: RankedLabel[]): VisualObservation {
   const visibleSignalCount = (choices: Record<string, Choice>) => Object.values(choices)
     .filter((choice) => choice.value !== "not_visible" && choice.confidence >= 0.27).length;
   const faceVisible = coverage(faceVisibility.value) >= 0.2 || visibleSignalCount(faceChoices) >= 2;
-  const bodyVisible = coverage(bodyVisibility.value) >= 0.2 || visibleSignalCount(bodyChoices) >= 2;
+  // Body-trait prompts can fire on portraits. They are never allowed to create
+  // body evidence on their own: the framing classifier must see at least an
+  // upper-body view. This prevents a face-only photo from receiving a body score.
+  const bodyVisible = coverage(bodyVisibility.value) >= 0.55 && bodyVisibility.confidence >= 0.2;
   if (faceVisible && coverage(faceVisibility.value) < 0.5) {
     faceVisibility = { value: "moderate", confidence: Math.max(faceVisibility.confidence, ...Object.values(faceChoices).map((choice) => choice.confidence)) };
-  }
-  if (bodyVisible && coverage(bodyVisibility.value) < 0.5) {
-    bodyVisibility = { value: "moderate", confidence: Math.max(bodyVisibility.confidence, ...Object.values(bodyChoices).map((choice) => choice.confidence)) };
   }
   const missingTraits: string[] = [];
   const tracked = (path: string, choice: Choice, visible = true) => {

@@ -39,10 +39,11 @@ test("low photo coverage does not block a result", () => {
   assert.doesNotMatch(source, /not enough visible information|defensible result|minimumAnalysisConfidence/i);
   assert.match(source, /setObservation\(value\)/);
 });
-test("face and body visibility use multiple observation signals", () => {
+test("face visibility is flexible while body scoring requires real framing evidence", () => {
   assert.match(worker, /visibleSignalCount/);
   assert.match(worker, /faceVisible = coverage\(faceVisibility\.value\) >= 0\.2/);
-  assert.match(worker, /bodyVisible = coverage\(bodyVisibility\.value\) >= 0\.2/);
+  assert.match(worker, /bodyVisible = coverage\(bodyVisibility\.value\) >= 0\.55/);
+  assert.match(worker, /bodyVisibility\.confidence >= 0\.2/);
   assert.match(source, /Strong preference match/);
   assert.match(source, /Chest prominence/);
   assert.match(source, /Hip prominence/);

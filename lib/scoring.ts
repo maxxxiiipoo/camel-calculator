@@ -36,14 +36,16 @@ function camelsFromScore(score: number) {
 
 export function scoreObservation(observation: VisualObservation) {
   const p = VISUAL_RUBRIC.preferences;
+  const faceIsVisible = observation.evidence.faceCoverage >= 0.2 && known(observation.face.visibility);
+  const bodyIsVisible = observation.evidence.bodyCoverage >= 0.55 && known(observation.physique.visibility);
   const categoryScores: Record<VisualCategory, number | null> = {
-    face: weightedVisibleScore([
+    face: !faceIsVisible ? null : weightedVisibleScore([
       { trait: observation.face.apparentSymmetry, preferred: p.apparentSymmetry, weight: VISUAL_RUBRIC.faceTraitWeights.apparentSymmetry },
       { trait: observation.face.featureBalance, preferred: p.featureBalance, weight: VISUAL_RUBRIC.faceTraitWeights.featureBalance },
       { trait: observation.face.expression, preferred: p.expression, weight: VISUAL_RUBRIC.faceTraitWeights.expression },
       { trait: observation.face.eyeAppearance, preferred: p.eyeAppearance, weight: VISUAL_RUBRIC.faceTraitWeights.eyeAppearance },
     ]),
-    body: weightedVisibleScore(Object.entries(VISUAL_RUBRIC.bodyTraitWeights).map(([key, weight]) => ({
+    body: !bodyIsVisible ? null : weightedVisibleScore(Object.entries(VISUAL_RUBRIC.bodyTraitWeights).map(([key, weight]) => ({
       trait: observation.physique[key as keyof typeof observation.physique],
       preferred: p[key as keyof typeof p] as string,
       weight,
@@ -61,14 +63,14 @@ export function scoreObservation(observation: VisualObservation) {
     coherence: weightedVisibleScore([
       { trait: observation.physique.proportionalBalance, preferred: p.proportionalBalance, weight: 50 },
       { trait: observation.style.visualCoordination, preferred: p.visualCoordination, weight: 50 },
-    ]),
+    ].filter(() => bodyIsVisible)),
   };
   const visibleCategories = (Object.keys(categoryScores) as VisualCategory[]).filter((key) => categoryScores[key] !== null);
   const categoryWeightTotal = visibleCategories.reduce((sum, key) => sum + VISUAL_RUBRIC.categoryWeights[key], 0);
   const rawScore = visibleCategories.reduce((sum, key) => sum + categoryScores[key]! * (VISUAL_RUBRIC.categoryWeights[key] / categoryWeightTotal), 0);
   const harmonyTraits = ["waistDefinition", "hipProminence", "gluteProminence", "chestProminence", "proportionalBalance"] as const;
   const fits = harmonyTraits
-    .filter((key) => known(observation.physique[key]))
+    .filter((key) => bodyIsVisible && known(observation.physique[key]))
     .map((key) => nonlinearFit(observation.physique[key].value, p[key]));
   const harmonyBonus = fits.length >= 3 ? Math.min(VISUAL_RUBRIC.proportionHarmonyBonusCap, (fits.reduce((a, b) => a + b, 0) / fits.length) * 5) : 0;
   const score = Math.min(
